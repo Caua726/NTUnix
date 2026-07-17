@@ -138,16 +138,27 @@ static void frame_tick(void)
     }
     wmproto_drain();
     appsrv_drain();
+    input_process_keys();   /* roteia teclas enfileiradas pelo hook (#15) */
     reap_dead();
     if (!wmproto_connected())
         builtin_layout();
 
+    /* transacao de layout aberta (FRAME-BEGIN sem COMMIT): nao apresenta um
+     * quadro parcial (#10). Safety: se travar >60 ticks, libera. */
+    static int frame_wait;
+    if (g_srv.in_frame) {
+        if (++frame_wait > 60) { g_srv.in_frame = 0; frame_wait = 0; }
+        return;
+    }
+    frame_wait = 0;
+
     /* idle-present: so recompoe quando algo muda (economiza CPU no WARP);
-     * um tick periodico cobre relogio e piscar do cursor. */
+     * um tick periodico cobre relogio e piscar do cursor. So terminais
+     * VISIVEIS forcam repaint — um terminal oculto que gera saida nao (#13). */
     static unsigned tick;
     int need = g_srv.dirty;
     for (Window *w = g_srv.windows; w && !need; w = w->next)
-        if (w->term && w->term->dirty)
+        if (w->visible && w->ws == g_srv.cur_ws && w->term && w->term->dirty)
             need = 1;
     if ((tick++ % 30) == 0)
         need = 1;
@@ -162,23 +173,27 @@ static LRESULT CALLBACK root_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
     switch (m) {
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
-        /* fallback do teclado: se o hook LL nao disparar. O hook suprime o
-         * que trata, entao nao ha processamento duplo. scan = lp[16..23]. */
-        input_key((unsigned)wp, (unsigned)((lp >> 16) & 0xff));
+        /* fallback: SO quando o hook LL nao esta ativo (evita duplo #24). */
+        if (!input_hook_active())
+            input_key((unsigned)wp, (unsigned)((lp >> 16) & 0xff));
         return 0;
     case WM_SYSCHAR:
         return 0;               /* engole o beep do Alt+tecla */
     case WM_LBUTTONDOWN: {
         Window *w = win_at_point(LOWORD(lp), HIWORD(lp));
-        if (w)
+        if (w && w != g_srv.focused) {
             win_focus(w);
+            wmproto_ev_focused(w);   /* mantem o ntwm em sincronia (#9) */
+        }
         return 0;
     }
     case WM_MOUSEMOVE:
         if (g_srv.ffm) {
             Window *w = win_at_point(LOWORD(lp), HIWORD(lp));
-            if (w && w != g_srv.focused)
+            if (w && w != g_srv.focused) {
                 win_focus(w);
+                wmproto_ev_focused(w);
+            }
         }
         return 0;
     case WM_CLOSE:

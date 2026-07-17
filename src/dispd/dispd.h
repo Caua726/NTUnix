@@ -65,6 +65,8 @@ typedef struct Server {
     int       bar_h;       /* altura da barra de status no topo */
     int       title_h;     /* altura da barra de titulo por janela (0=off) */
     int       dirty;       /* precisa recompor+apresentar neste tick */
+    int       in_frame;    /* dentro de FRAME-BEGIN..COMMIT (nao apresenta) */
+    int       debug;       /* DISPD_DEBUG=1: diagnosticos na tela/log */
     int       ffm;         /* focus-follows-mouse (DISPD_FFM=1) */
     long      keys_seen;   /* diagnostico: teclas capturadas pelo hook */
     int       selftest;    /* DISPD_SELFTEST=1: so retangulos, sem term/ntwm */
@@ -88,9 +90,11 @@ void     win_focus(Window *w);
 void     compose_and_present(void);
 Window  *win_at_point(int x, int y);   /* topo visivel no ws atual */
 
-/* input.c — teclado: hook LL global + WM_KEYDOWN (foco forcado), redundantes */
+/* input.c — teclado: hook LL global (enfileira) + WM_KEYDOWN fallback */
 void     input_install_hook(void);
-int      input_key(unsigned vk, unsigned scan);   /* retorna 1 se tratou */
+void     input_process_keys(void);   /* main thread: drena e roteia (frame_tick) */
+int      input_hook_active(void);
+void     input_key(unsigned vk, unsigned scan);   /* fallback WM_KEYDOWN */
 
 /* wmproto.c */
 void     wmproto_start(void);                 /* sobe o servidor de pipe (thread) */
@@ -100,11 +104,15 @@ int      wmproto_grabbed(unsigned mods, unsigned vk);
 void     wmproto_ev_created(Window *w);
 void     wmproto_ev_destroyed(unsigned id);
 void     wmproto_ev_title(Window *w);
+void     wmproto_ev_focused(Window *w);   /* foco mudou no dispd (ex.: mouse) */
 void     wmproto_ev_key(unsigned mods, unsigned vk);
 
 /* appsrv.c — fronteira apps<->dispd (surface compartilhada via section) */
 void     appsrv_start(void);   /* sobe o servidor multi-cliente (thread) */
 void     appsrv_drain(void);   /* main thread: aplica pedidos dos apps */
+void     appsrv_close_wid(unsigned id);            /* fecha a conexao do app */
+void     appsrv_input_key(unsigned id, unsigned mods, unsigned vk, unsigned ch);
+void     appsrv_input_mouse(unsigned id, int x, int y, int buttons);
 
 /* dispd.c */
 Window  *spawn_terminal(const char *cmdline);  /* cria janela WK_TERM + pty */

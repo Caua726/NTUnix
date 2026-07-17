@@ -87,6 +87,13 @@ static void on_key(unsigned mods, unsigned vk)
     }
 }
 
+static void set_title(Client *c, const char *t)
+{
+    if (!c || !t) return;
+    strncpy(c->title, t, sizeof c->title - 1);
+    c->title[sizeof c->title - 1] = 0;
+}
+
 static void handle(char *line)
 {
     /* copia o verbo antes do split destruir a linha */
@@ -97,8 +104,14 @@ static void handle(char *line)
     memcpy(verb, line, vl);
     verb[vl] = 0;
 
-    char *av[10];
-    int n = ntuwm_split(line, av, 10, -1);
+    /* titulo (ultimo campo) e' tomado verbatim conforme o verbo */
+    int tail = -1;
+    if (!strcmp(verb, EVT_WINDOW)) tail = 5;        /* WINDOW id kind pid ws title */
+    else if (!strcmp(verb, EVT_CREATED)) tail = 4;  /* WINDOW-CREATED id kind pid title */
+    else if (!strcmp(verb, EVT_TITLE)) tail = 2;    /* WINDOW-TITLE id title */
+
+    char *av[12];
+    int n = ntuwm_split(line, av, 12, tail);
     if (n < 1)
         return;
 
@@ -107,18 +120,22 @@ static void handle(char *line)
     } else if (!strcmp(verb, EVT_OUTPUT) && n >= 6) {
         g_wx = atoi(av[2]); g_wy = atoi(av[3]);
         g_ww = atoi(av[4]); g_wh = atoi(av[5]);
-    } else if (!strcmp(verb, EVT_WINDOW) && n >= 2) {
-        cl_add((unsigned)strtoul(av[1], NULL, 10), g_curws);   /* snapshot: tila no SYNC */
+    } else if (!strcmp(verb, EVT_CURWS) && n >= 2) {
+        g_curws = atoi(av[1]);                       /* restart-survival (#11) */
+    } else if (!strcmp(verb, EVT_WINDOW) && n >= 5) {
+        Client *c = cl_add((unsigned)strtoul(av[1], NULL, 10), atoi(av[4]));
+        if (n >= 6) set_title(c, av[5]);             /* snapshot: tila no SYNC */
     } else if (!strcmp(verb, EVT_CREATED) && n >= 2) {
-        cl_add((unsigned)strtoul(av[1], NULL, 10), g_curws);
+        Client *c = cl_add((unsigned)strtoul(av[1], NULL, 10), g_curws);
+        if (n >= 5) set_title(c, av[4]);             /* #40 */
         send_frame();
     } else if (!strcmp(verb, EVT_DESTROYED) && n >= 2) {
         cl_remove((unsigned)strtoul(av[1], NULL, 10));
         send_frame();
     } else if (!strcmp(verb, EVT_TITLE) && n >= 3) {
-        Client *c = cl_find((unsigned)strtoul(av[1], NULL, 10));
-        if (c) { strncpy(c->title, av[2], sizeof c->title - 1);
-                 c->title[sizeof c->title - 1] = 0; }
+        set_title(cl_find((unsigned)strtoul(av[1], NULL, 10)), av[2]);
+    } else if (!strcmp(verb, EVT_FOCUSED) && n >= 2) {
+        g_focused = cl_find((unsigned)strtoul(av[1], NULL, 10));   /* #9 */
     } else if (!strcmp(verb, EVT_KEY) && n >= 3) {
         on_key((unsigned)strtoul(av[1], NULL, 16),
                (unsigned)strtoul(av[2], NULL, 16));

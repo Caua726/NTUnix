@@ -21,6 +21,7 @@ static HANDLE g_reader;
 static HANDLE g_rev, g_wev, g_cev;     /* eventos: read, write, connect */
 static OVERLAPPED g_wov;               /* overlapped do escritor (main thread) */
 static volatile LONG g_connected;
+static volatile LONG g_need_reset;     /* reader sinaliza desconexao -> main reseta */
 
 /* fila de comandos (produtor: reader thread; consumidor: main thread) */
 static char *g_q[QCAP];
@@ -42,10 +43,12 @@ static void q_push(const char *s)
     int nt = (g_qt + 1) % QCAP;
     if (nt == g_qh) {           /* cheia: descarta o mais novo */
         free(dup);
-    } else {
-        g_q[g_qt] = dup;
-        g_qt = nt;
+        LeaveCriticalSection(&g_qlock);
+        dispd_log("wmproto: fila cheia, comando descartado (ntwm lento?)");
+        return;
     }
+    g_q[g_qt] = dup;
+    g_qt = nt;
     LeaveCriticalSection(&g_qlock);
 }
 
@@ -72,10 +75,19 @@ static void wm_send(const char *line)
     g_wov.hEvent = g_wev;
     DWORD w = 0;
     BOOL ok = WriteFile(g_pipe, line, (DWORD)strlen(line), &w, &g_wov);
-    if (!ok && GetLastError() == ERROR_IO_PENDING)
-        ok = GetOverlappedResult(g_pipe, &g_wov, &w, TRUE);
-    if (!ok)
+    if (!ok && GetLastError() == ERROR_IO_PENDING) {
+        /* timeout: ntwm travado nao pode congelar o compositor (#14) */
+        if (WaitForSingleObject(g_wev, 2000) == WAIT_OBJECT_0)
+            ok = GetOverlappedResult(g_pipe, &g_wov, &w, FALSE);
+        else {
+            CancelIoEx(g_pipe, &g_wov);
+            ok = FALSE;
+        }
+    }
+    if (!ok) {
         InterlockedExchange(&g_connected, 0);
+        InterlockedExchange(&g_need_reset, 1);
+    }
 }
 
 int wmproto_connected(void)
@@ -102,6 +114,13 @@ void wmproto_ev_title(Window *w)
 {
     char b[512];
     snprintf(b, sizeof b, "%s %u %s", EVT_TITLE, w->id, w->title);
+    wm_send(b);
+}
+
+void wmproto_ev_focused(Window *w)
+{
+    char b[64];
+    snprintf(b, sizeof b, "%s %u", EVT_FOCUSED, w ? w->id : 0);
     wm_send(b);
 }
 
@@ -138,6 +157,8 @@ static void grab_del(unsigned mods, unsigned vk)
         }
 }
 
+static int g_hello;                 /* ja recebeu HELLO valido? (main thread) */
+
 /* ---- handshake / snapshot (main thread) ---- */
 
 static void send_snapshot(void)
@@ -149,9 +170,16 @@ static void send_snapshot(void)
     snprintf(b, sizeof b, "%s 0 0 %d %d %d", EVT_OUTPUT, g_srv.bar_h,
              g_srv.scr_w, g_srv.scr_h - g_srv.bar_h);
     wm_send(b);
+    snprintf(b, sizeof b, "%s %d", EVT_CURWS, g_srv.cur_ws);
+    wm_send(b);
     for (Window *w = g_srv.windows; w; w = w->next) {
-        snprintf(b, sizeof b, "%s %u %d %lu %s", EVT_WINDOW, w->id,
-                 (int)w->kind, w->pid, w->title[0] ? w->title : "terminal");
+        snprintf(b, sizeof b, "%s %u %d %lu %d %s", EVT_WINDOW, w->id,
+                 (int)w->kind, w->pid, w->ws,
+                 w->title[0] ? w->title : (w->kind == WK_TERM ? "terminal" : "app"));
+        wm_send(b);
+    }
+    if (g_srv.focused) {
+        snprintf(b, sizeof b, "%s %u", EVT_FOCUSED, g_srv.focused->id);
         wm_send(b);
     }
     wm_send(EVT_SYNC);
@@ -161,20 +189,48 @@ static void send_snapshot(void)
 
 static void apply(char *line)
 {
+    /* SPAWN-TERM: cmdline pode ter espacos -> trata antes do split destrutivo */
+    size_t sl = strlen(CMD_SPAWN);
+    if (!strncmp(line, CMD_SPAWN, sl) && (line[sl] == 0 || line[sl] == ' ')) {
+        if (!g_hello)
+            return;
+        const char *p = line + sl;
+        while (*p == ' ' || *p == '\t') p++;
+        spawn_terminal(*p ? p : NULL);
+        return;
+    }
+
     char *av[10];
     int n = ntuwm_split(line, av, 10, -1);
     if (n < 1)
         return;
     const char *v = av[0];
 
-    if (!strcmp(v, CMD_HELLO)) {
+    if (!strcmp(v, CMD_HELLO)) {           /* handshake (#43) */
+        g_ngrabs = 0;                      /* WM novo re-registra grabs (#42) */
+        g_hello = 1;
+        g_srv.in_frame = 0;
         InterlockedExchange(&g_connected, 1);
         send_snapshot();
+        return;
+    }
+    if (!g_hello)                          /* ignora comandos antes do HELLO */
+        return;
+
+    if (!strcmp(v, CMD_FRAME_BEGIN)) {
+        g_srv.in_frame = 1;                /* transacao: nao apresenta ate COMMIT */
+    } else if (!strcmp(v, CMD_FRAME_COMMIT)) {
+        g_srv.in_frame = 0;
+        g_srv.dirty = 1;
     } else if (!strcmp(v, CMD_PLACE) && n >= 8) {
         Window *w = win_find((unsigned)strtoul(av[1], NULL, 10));
         if (w) {
             int x = atoi(av[2]), y = atoi(av[3]);
             int ww = atoi(av[4]), hh = atoi(av[5]);
+            if (ww < 1) ww = 1;
+            if (hh < 1) hh = 1;
+            if (ww > g_srv.scr_w * 4) ww = g_srv.scr_w * 4;   /* clamp (#44) */
+            if (hh > g_srv.scr_h * 4) hh = g_srv.scr_h * 4;
             w->rect.left = x; w->rect.top = y;
             w->rect.right = x + ww; w->rect.bottom = y + hh;
             w->ws = atoi(av[6]);
@@ -183,24 +239,28 @@ static void apply(char *line)
             win_set_client_size(w, ww - bp, hh - bp - g_srv.title_h);
         }
     } else if (!strcmp(v, CMD_FOCUS) && n >= 2) {
-        win_focus(win_find((unsigned)strtoul(av[1], NULL, 10)));
+        win_focus(win_find((unsigned)strtoul(av[1], NULL, 10)));  /* 0 -> NULL */
     } else if (!strcmp(v, CMD_WORKSPACE) && n >= 2) {
-        g_srv.cur_ws = atoi(av[1]);
+        int ws = atoi(av[1]);
+        if (ws >= 0 && ws < 32)
+            g_srv.cur_ws = ws;
     } else if (!strcmp(v, CMD_BORDER) && n >= 4) {
         Window *w = win_find((unsigned)strtoul(av[1], NULL, 10));
         if (w) {
-            w->border_px = atoi(av[2]);
+            int px = atoi(av[2]);
+            w->border_px = (px < 0) ? 0 : (px > 32 ? 32 : px);
             unsigned long rgb = strtoul(av[3], NULL, 16);
             w->border_rgb = RGB((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff);
         }
-    } else if (!strcmp(v, CMD_SPAWN)) {
-        spawn_terminal(n >= 2 ? av[1] : NULL);   /* obs: sem tail; cmd sem espacos */
     } else if (!strcmp(v, CMD_CLOSE) && n >= 2) {
         Window *w = win_find((unsigned)strtoul(av[1], NULL, 10));
         if (w) {
             unsigned id = w->id;
+            int is_app = (w->kind == WK_APP);
             win_destroy(w);
             wmproto_ev_destroyed(id);
+            if (is_app)
+                appsrv_close_wid(id);      /* mata o processo do app (#3) */
         }
     } else if (!strcmp(v, CMD_GRAB) && n >= 3) {
         grab_add((unsigned)strtoul(av[1], NULL, 16), (unsigned)strtoul(av[2], NULL, 16));
@@ -209,11 +269,23 @@ static void apply(char *line)
     } else if (!strcmp(v, CMD_QUIT)) {
         g_srv.running = 0;
     }
-    /* FRAME-BEGIN / FRAME-COMMIT / TITLEBAR: aplicacao ja e' atomica por tick */
+    /* CMD_TITLEBAR: dispd ja desenha titulos sempre — aceito sem efeito extra */
+}
+
+/* reseta estado do WM apos desconexao (main thread) — grabs, hello, frame (#42) */
+static void reset_wm_state(void)
+{
+    g_ngrabs = 0;
+    g_hello = 0;
+    g_srv.in_frame = 0;
+    g_srv.dirty = 1;
 }
 
 void wmproto_drain(void)
 {
+    if (InterlockedExchange(&g_need_reset, 0))
+        reset_wm_state();
+
     char *line;
     while ((line = q_pop()) != NULL) {
         /* uma mensagem pode conter varias linhas — separa */
@@ -223,7 +295,8 @@ void wmproto_drain(void)
                 apply(s);
         }
         free(line);
-        g_srv.dirty = 1;   /* comando aplicado -> recompoe neste tick */
+        if (!g_srv.in_frame)
+            g_srv.dirty = 1;   /* fora de transacao: recompoe neste tick */
     }
 }
 
@@ -267,6 +340,7 @@ static DWORD WINAPI reader_main(LPVOID arg)
         }
 
         InterlockedExchange(&g_connected, 0);
+        InterlockedExchange(&g_need_reset, 1);   /* main reseta grabs/hello */
         DisconnectNamedPipe(g_pipe);   /* re-arma para o proximo ntwm */
     }
     return 0;

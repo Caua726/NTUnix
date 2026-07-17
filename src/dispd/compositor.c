@@ -155,8 +155,9 @@ void win_destroy(Window *w)
     if (*pp)
         *pp = w->next;
 
-    if (g_srv.focused == w)
-        g_srv.focused = g_srv.windows;   /* passa foco pra alguma outra */
+    int refocus = (g_srv.focused == w);
+    if (refocus)
+        g_srv.focused = NULL;
 
     if (w->term)
         term_destroy(w->term);
@@ -164,6 +165,14 @@ void win_destroy(Window *w)
     if (w->section)
         CloseHandle(w->section);
     free(w);
+
+    /* #8: passa o foco pra outra janela do ws atual (com focused=1) */
+    if (refocus) {
+        Window *nf = NULL;
+        for (Window *o = g_srv.windows; o; o = o->next)
+            if (o->ws == g_srv.cur_ws) { nf = o; break; }
+        win_focus(nf);
+    }
     g_srv.dirty = 1;
 }
 
@@ -212,6 +221,8 @@ void win_focus(Window *w)
     if (w) {
         w->focused = 1;
         g_srv.focused = w;
+    } else {
+        g_srv.focused = NULL;   /* #7: limpa o ponteiro tambem */
     }
     g_srv.dirty = 1;
 }
@@ -244,8 +255,11 @@ static void pump_title(Window *w)
         w->term->title_changed = 0;
     }
     LeaveCriticalSection(&w->term->lock);
-    if (changed)
+    if (changed) {
+        for (char *p = w->title; *p; p++)   /* #17: sem controle -> sem injecao */
+            if ((unsigned char)*p < 0x20) *p = ' ';
         wmproto_ev_title(w);
+    }
 }
 
 /* barra de status no topo: workspaces + titulo focado + relogio.

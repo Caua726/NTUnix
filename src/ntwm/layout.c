@@ -126,8 +126,8 @@ void send_frame(void)
                 g_curws, 1000);
     }
 
-    if (g_focused)
-        wm_send("%s %u", CMD_FOCUS, g_focused->id);
+    /* sempre manda FOCUS (0 = limpa) para nao deixar foco no ws antigo (#6) */
+    wm_send("%s %u", CMD_FOCUS, g_focused ? g_focused->id : 0);
     wm_send(CMD_FRAME_COMMIT);
 }
 
@@ -189,7 +189,14 @@ void tagto(int ws)
 {
     if (!g_focused)
         return;
-    g_focused->ws = ws;
+    Client *moved = g_focused;
+    moved->ws = ws;
+    /* avisa o dispd do novo ws da janela movida (fica escondida) — #4 */
+    wm_send("%s %u 0 0 1 1 %d 0", CMD_PLACE, moved->id, ws);
+    /* foco vai pra outra janela do ws atual — #5 */
+    g_focused = NULL;
+    for (Client *c = g_clients; c; c = c->next)
+        if (c->ws == g_curws) { g_focused = c; break; }
     send_frame();   /* re-tila o ws atual (a janela movida some) */
 }
 
