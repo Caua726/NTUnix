@@ -13,6 +13,29 @@ static DWORD page_protection(nt_sc_t prot, int copy_on_write)
     return PAGE_READONLY;
 }
 
+/* Arena de VA alta-mas-FIXA para a memória de usuário (heap/brk/mmap), longe das
+ * VAs baixas do loader do NT E das DLLs (~0x7ff...). Garante que essas regiões
+ * estejam LIVRES no processo filho do fork() -> cópia limpa, sem colisão (ver
+ * nt_sys_fork; MEM_TOP_DOWN não bastava porque o loader do filho também aloca
+ * no topo). Bump-allocator: nunca reusa VA (o espaço é imenso); cada alocação é
+ * um VirtualAlloc separado, então munmap (VirtualFree) continua funcionando. */
+#define NT_ARENA_BASE ((uintptr_t)0x0000200000000000ULL) /* 32 TB */
+static uintptr_t g_arena_next = NT_ARENA_BASE;
+
+static void *arena_alloc(size_t length, DWORD alloc_flags, DWORD protect)
+{
+    size_t rounded = (length + 0xffffU) & ~(size_t)0xffffU; /* granularidade 64 KB */
+    int tries;
+    for (tries = 0; tries < 100000; ++tries) {
+        void *want = (void *)g_arena_next;
+        void *got;
+        g_arena_next += rounded ? rounded : 0x10000;
+        got = VirtualAlloc(want, length, alloc_flags, protect);
+        if (got) return got;
+    }
+    return 0;
+}
+
 nt_sc_t nt_sys_mmap(nt_sc_t addr_arg, nt_sc_t length_arg, nt_sc_t prot, nt_sc_t flags,
                  nt_sc_t fd, nt_sc_t off)
 {
@@ -27,8 +50,11 @@ nt_sc_t nt_sys_mmap(nt_sc_t addr_arg, nt_sc_t length_arg, nt_sc_t prot, nt_sc_t 
     protect = page_protection(prot, !(flags & NT_MAP_ANONYMOUS) &&
                                     (flags & NT_MAP_PRIVATE));
     if (flags & NT_MAP_ANONYMOUS) {
-        mapped = VirtualAlloc(requested, length, MEM_RESERVE | MEM_COMMIT,
-                              protect);
+        /* endereço escolhido pelo SO -> aloca da arena de VA fixa (livre no
+         * filho do fork). Endereço pedido (MAP_FIXED etc.) -> honra. */
+        mapped = requested
+            ? VirtualAlloc(requested, length, MEM_RESERVE | MEM_COMMIT, protect)
+            : arena_alloc(length, MEM_RESERVE | MEM_COMMIT, protect);
         if (!mapped) return nt_last_error();
         if ((flags & (NT_MAP_FIXED | NT_MAP_FIXED_NOREPLACE)) &&
             mapped != requested) {
@@ -144,7 +170,8 @@ static BOOL CALLBACK initialize_brk(PINIT_ONCE once, PVOID parameter,
                                     PVOID *context)
 {
     (void)once; (void)parameter; (void)context;
-    brk_base = VirtualAlloc(0, NT_BRK_RESERVE, MEM_RESERVE, PAGE_READWRITE);
+    /* heap na arena de VA fixa (livre no filho do fork; ver nt_sys_fork). */
+    brk_base = arena_alloc(NT_BRK_RESERVE, MEM_RESERVE, PAGE_READWRITE);
     brk_current = brk_committed = brk_base;
     return TRUE;
 }

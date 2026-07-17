@@ -117,10 +117,10 @@ smoke: $(BUILD)/test/smoke.exe
 
 test: $(BUILD)/test/hello.exe $(BUILD)/test/smoke.exe \
       $(BUILD)/test/memory.exe $(BUILD)/test/network.exe \
-      $(BUILD)/test/spawn.exe \
+      $(BUILD)/test/spawn.exe $(BUILD)/test/forktest.exe \
       $(BUILD)/test/etc/hosts check-imports
 	cd $(BUILD)/test && for executable in hello.exe smoke.exe memory.exe \
-		network.exe spawn.exe; do \
+		network.exe spawn.exe forktest.exe; do \
 		echo "== $$executable =="; \
 		env WINEDEBUG=-all $(TIMEOUT) --kill-after=2s 20s \
 			$(WINE) "$$executable" || exit $$?; \

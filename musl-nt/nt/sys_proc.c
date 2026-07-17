@@ -1,28 +1,18 @@
 #include "nt/ntpriv.h"
 
-/* fork() via RtlCloneUserProcess — o fork nativo do NT (wrapper de
- * NtCreateUserProcess), o mesmo caminho que os subsistemas Unix-on-NT usam.
- * Undocumented mas estável; retorna STATUS_PROCESS_CLONED (0x129) no filho.
- * Ausente no Wine => fork indisponível lá (ENOSYS); presente no Windows real
- * (inclusive no WinPE da NTUnix-live), que é onde isso se valida.
+/* fork() estilo Cygwin — NÃO usa RtlCloneUserProcess (aquele clone parcial não
+ * consegue exec: o CreateProcessW crasha nele). Aqui o filho é um processo
+ * NORMAL: CreateProcessW(a si mesmo, SUSPENSO) => crt0 do filho nunca roda; o
+ * pai copia sua memória gravável pro filho no MESMO endereço virtual
+ * (VirtualAllocEx + WriteProcessMemory) e transplanta o contexto do ponto do
+ * fork() (RtlCaptureContext + SetThreadContext), fazendo o filho retomar ali
+ * retornando 0. Como é um processo completo (CSR/loader íntegros), o filho pode
+ * exec, ler, tudo. Bônus: só usa Win32 padrão => funciona no Wine também.
  *
- * IMPORTANTE: o clone suporta rodar código Unix in-process (read/write/pipe/
- * getdents/malloc/console funcionam), mas NÃO suporta CreateProcessW — ele
- * crasha dentro do processo clonado (o CSR/loader fica parcial). Por isso o
- * BusyBox roda TODO applet in-process (patch no ash), em vez de fork+exec. */
-#define NT_RTL_CLONE_CREATE_SUSPENDED 0x00000001UL
-#define NT_RTL_CLONE_INHERIT_HANDLES  0x00000002UL
-#define NT_STATUS_PROCESS_CLONED      ((LONG)0x00000129)
-
-typedef struct {
-    ULONG Length;
-    HANDLE ProcessHandle;
-    HANDLE ThreadHandle;
-    CLIENT_ID ClientId;
-    unsigned char ImageInformation[128]; /* SECTION_IMAGE_INFORMATION + folga */
-} nt_clone_info;
-
-typedef LONG (NTAPI *nt_clone_fn)(ULONG, PVOID, PVOID, HANDLE, PVOID);
+ * Requisitos: (1) o thread pointer da musl é um global (ver __set_thread_area),
+ * então a cópia de memória já o leva; (2) o exe é linkado com base fixa
+ * (--disable-dynamicbase) para carregar no MESMO VA no pai e no filho — senão o
+ * ctx.Rip e o .data copiado cairiam no lugar errado. */
 
 /* ---- tabela de processos filhos: o fork registra (pid,handle) aqui e o
  * wait4 usa — inclusive waitpid(-1) (esperar QUALQUER filho), que o ash
@@ -349,46 +339,150 @@ nt_sc_t nt_sys_kill(nt_sc_t pid, nt_sc_t sig)
     return 0;
 }
 
+/* O filho já foi SUSPENSO pelo chamador. Copia as regiões graváveis do pai:
+ *  - regiões com MEM_TOP_DOWN (heap/brk/mmap/argv) estão em VA alta, LIVRE no
+ *    filho -> VirtualAllocEx + copia limpo;
+ *  - a STACK (contém rsp) e o .data/.bss do EXE colidem (VA baixa/base fixa),
+ *    mas são SEGUROS de sobrescrever: o filho está suspenso e será redirecionado
+ *    pra stack, e o musl init do filho não rodou (o .data dele é só o inicial);
+ *  - TEB/PEB nunca (identidade do filho); outras colisões (heap/loader do filho)
+ *    são puladas — com MEM_TOP_DOWN não devem conter memória nossa. */
+static int nt_fork_copy_memory(HANDLE child, HMODULE exe, void *rsp)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    unsigned char *addr = 0;
+    int n = 0, fail = 0;
+    void *teb = (void *)NtCurrentTeb();
+    void *peb = (void *)__readgsqword(0x60); /* TEB->ProcessEnvironmentBlock */
+    while (VirtualQuery(addr, &mbi, sizeof mbi)) {
+        if (mbi.State == MEM_COMMIT && !(mbi.Protect & PAGE_GUARD)) {
+            unsigned char *b = mbi.BaseAddress;
+            unsigned char *e = b + mbi.RegionSize;
+            DWORD base = mbi.Protect & 0xffU;
+            int writable = base == PAGE_READWRITE || base == PAGE_WRITECOPY ||
+                           base == PAGE_EXECUTE_READWRITE ||
+                           base == PAGE_EXECUTE_WRITECOPY;
+            int is_exe = mbi.Type == MEM_IMAGE &&
+                         mbi.AllocationBase == (void *)exe;
+            int mine = mbi.Type == MEM_PRIVATE || is_exe;
+            int is_teb_peb = ((unsigned char *)teb >= b && (unsigned char *)teb < e) ||
+                             ((unsigned char *)peb >= b && (unsigned char *)peb < e);
+            int has_rsp = (unsigned char *)rsp >= b && (unsigned char *)rsp < e;
+            if (writable && mine && !is_teb_peb) {
+                SIZE_T wrote;
+                DWORD old;
+                if (VirtualAllocEx(child, b, mbi.RegionSize,
+                                   MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)) {
+                    /* VA livre no filho: cópia limpa */
+                    WriteProcessMemory(child, b, b, mbi.RegionSize, &wrote);
+                    VirtualProtectEx(child, b, mbi.RegionSize, base, &old);
+                    ++n;
+                } else if (is_exe || has_rsp) {
+                    /* colisão SEGURA (stack / .data do exe): sobrescreve. A
+                     * stack do pai pode ter MAIS páginas committadas que a do
+                     * filho — garante commit da faixa inteira antes de escrever. */
+                    VirtualAllocEx(child, b, mbi.RegionSize, MEM_COMMIT,
+                                   PAGE_READWRITE);
+                    VirtualProtectEx(child, b, mbi.RegionSize, PAGE_READWRITE, &old);
+                    if (WriteProcessMemory(child, b, b, mbi.RegionSize, &wrote))
+                        ++n;
+                    else
+                        ++fail;
+                    VirtualProtectEx(child, b, mbi.RegionSize, base, &old);
+                } else {
+                    /* colisão NÃO-segura (heap/loader do filho): não copia (com
+                     * a arena de VA fixa isto não contém memória nossa). */
+                    ++fail;
+                }
+            }
+        }
+        addr = (unsigned char *)mbi.BaseAddress + mbi.RegionSize;
+        if (mbi.RegionSize == 0) break;
+    }
+    return (fail << 16) | (n & 0xffff);
+}
+
 nt_sc_t nt_sys_fork(void)
 {
-    static nt_clone_fn clone_fn;
-    static int resolved;
-    nt_clone_info info;
-    LONG status;
+    WCHAR self[NT_PATH_CAP];
+    WCHAR cmdline[48];
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    CONTEXT ctx;
+    SECURITY_ATTRIBUTES sa;
+    HANDLE ev;
+    DWORD parent_pid = GetCurrentProcessId();
+    HMODULE exe = GetModuleHandleW(0);
+    const char *hexd = "0123456789abcdef";
+    uintptr_t hv;
+    int i, k;
 
-    if (!resolved) {
-        HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-        clone_fn = ntdll
-            ? (nt_clone_fn)(uintptr_t)GetProcAddress(ntdll, "RtlCloneUserProcess")
-            : 0;
-        resolved = 1;
-    }
-    if (!clone_fn) return -NT_ENOSYS; /* Wine: sem fork nativo */
-
-    nt_memset(&info, 0, sizeof info);
-    /* todos os fds precisam ser herdáveis pra atravessar o clone */
+    if (!GetModuleFileNameW(0, self, NT_ARRAY_LEN(self)))
+        return nt_last_error();
+    /* todos os fds precisam ser herdáveis pra atravessar o fork */
     nt_fd_make_inheritable();
-    status = clone_fn(NT_RTL_CLONE_CREATE_SUSPENDED | NT_RTL_CLONE_INHERIT_HANDLES,
-                      0, 0, 0, &info);
-    if (status == NT_STATUS_PROCESS_CLONED) {
-        /* o processo clonado herda os handles mas não a conexão com o
-         * conhost; reanexa ao console do pai e reassocia stdin/out/err,
-         * senão o filho não consegue escrever (saía com 255 mudo). */
-        FreeConsole();
-        AttachConsole(ATTACH_PARENT_PROCESS);
-        nt_fd_reattach_console();
-        return 0; /* o filho da clonagem retorna 0, como o fork() do Unix */
-    }
-    if (status < 0)
-        return nt_error_from_status(status);
 
-    /* o pai retoma a thread do filho, guarda (pid,handle) pro wait4 e devolve
-     * o pid (kill acha-o por pid via OpenProcess). */
-    ResumeThread(info.ThreadHandle);
-    CloseHandle(info.ThreadHandle);
-    {
-        DWORD pid = (DWORD)(uintptr_t)info.ClientId.UniqueProcess;
-        child_add(pid, info.ProcessHandle);
-        return (nt_sc_t)pid;
+    /* evento herdável: o filho o sinaliza quando o loader terminar (IAT pronta) */
+    sa.nLength = sizeof sa;
+    sa.lpSecurityDescriptor = 0;
+    sa.bInheritHandle = TRUE;
+    ev = CreateEventW(&sa, TRUE, FALSE, 0);
+    if (!ev) return nt_last_error();
+
+    /* cmdline = "\x01FORK=<ev_hex>" — o marcador que o crt0 do filho detecta */
+    cmdline[0] = 1; cmdline[1] = L'F'; cmdline[2] = L'O';
+    cmdline[3] = L'R'; cmdline[4] = L'K'; cmdline[5] = L'=';
+    hv = (uintptr_t)ev;
+    k = 6;
+    for (i = (int)sizeof hv * 2 - 1; i >= 0; --i)
+        cmdline[k++] = (WCHAR)(unsigned char)hexd[(hv >> (i * 4)) & 0xf];
+    cmdline[k] = 0;
+
+    nt_memset(&si, 0, sizeof si);
+    si.cb = sizeof si;
+    nt_memset(&pi, 0, sizeof pi);
+    /* NÃO suspenso: o loader do filho roda (resolve a IAT, inicia DLLs); aí o
+     * crt0 detecta o marcador, sinaliza 'ev' e fica girando. */
+    if (!CreateProcessW(self, cmdline, 0, 0, TRUE, 0, 0, 0, &si, &pi)) {
+        nt_sc_t r = nt_last_error();
+        CloseHandle(ev);
+        return r;
     }
+    /* espera o filho terminar o loader (imports resolvidos) e sinalizar.
+     * Timeout defensivo: se o filho não sinalizar (bug), não trava o pai. */
+    if (WaitForSingleObject(ev, 10000) != WAIT_OBJECT_0) {
+        CloseHandle(ev);
+        TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return -NT_EAGAIN;
+    }
+    CloseHandle(ev);
+
+    nt_memset(&ctx, 0, sizeof ctx);
+    RtlCaptureContext(&ctx);
+    /* ----- ponto de retomada: o PAI cai aqui já; o FILHO cai aqui depois, via
+     * SetThreadContext. Distingue pelo pid (o filho tem outro). ----- */
+    if (GetCurrentProcessId() != parent_pid) {
+        return 0; /* ===== FILHO ===== retorna 0, como o fork() do Unix */
+    }
+
+    /* ===== PAI ===== suspende o filho (que está girando em user-mode no crt0,
+     * com a IAT já resolvida), copia a memória (sobrescreve a stack dele com a
+     * do pai — seguro pois está parado e vai ser redirecionado), transplanta o
+     * contexto do ponto do fork() e resume. */
+    SuspendThread(pi.hThread);
+    nt_fork_copy_memory(pi.hProcess, exe, (void *)(uintptr_t)ctx.Rsp);
+    ctx.ContextFlags = CONTEXT_FULL;
+    if (!SetThreadContext(pi.hThread, &ctx)) {
+        nt_sc_t r = nt_last_error();
+        TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return r;
+    }
+    ResumeThread(pi.hThread);
+    CloseHandle(pi.hThread);
+    child_add(pi.dwProcessId, pi.hProcess); /* pro wait4/kill */
+    return (nt_sc_t)pi.dwProcessId;
 }

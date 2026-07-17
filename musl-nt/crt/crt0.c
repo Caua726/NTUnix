@@ -134,9 +134,50 @@ static void fill_random(unsigned char *out, size_t length)
     }
 }
 
+/* Aloca numa VA alta-mas-FIXA (24 TB), longe do loader baixo e das DLLs no topo,
+ * pra essa memória estar LIVRE no filho do fork() (ver nt_sys_fork). */
+static void *hialloc(size_t size)
+{
+    static uintptr_t next = (uintptr_t)0x0000180000000000ULL;
+    int tries;
+    for (tries = 0; tries < 100000; ++tries) {
+        void *want = (void *)next;
+        void *got;
+        next += (size + 0xffff) & ~(uintptr_t)0xffff;
+        got = VirtualAlloc(want, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        if (got) return got;
+    }
+    return 0;
+}
+
 __attribute__((noreturn)) void mainCRTStartup(void)
 {
     const WCHAR *command = GetCommandLineW();
+
+    /* fork-B (estilo Cygwin): se fomos criados como o filho de um fork(), o
+     * loader do NT JÁ rodou aqui (imports resolvidos, DLLs iniciadas), mas o
+     * crt0 normal NÃO deve rodar — o pai vai transplantar o contexto do ponto
+     * do fork() via SetThreadContext. Marcador na cmdline: "\x01FORK=<hex>",
+     * onde <hex> é o handle (herdado) do evento a sinalizar. Sinaliza o pai e
+     * fica girando; o pai suspende, faz SetThreadContext e resume no fork(). */
+    if (command[0] == 1 && command[1] == L'F' && command[2] == L'O' &&
+        command[3] == L'R' && command[4] == L'K' && command[5] == L'=') {
+        unsigned long long handle_value = 0;
+        const WCHAR *p = command + 6;
+        for (; *p; ++p) {
+            WCHAR c = *p;
+            if (c >= L'0' && c <= L'9') handle_value = handle_value * 16 + (c - L'0');
+            else if (c >= L'a' && c <= L'f') handle_value = handle_value * 16 + (c - L'a' + 10);
+            else break;
+        }
+        SetEvent((HANDLE)(uintptr_t)handle_value);
+        /* loop APERTADO em user-mode (sem Sleep/syscall): o pai vai suspender
+         * esta thread e fazer SetThreadContext. Suspender uma thread parada num
+         * syscall (Sleep) pode fazer o SetThreadContext não pegar limpo no
+         * Windows real; num loop de 'pause' a thread está sempre em user-mode. */
+        for (;;) __asm__ __volatile__("pause" ::: "memory");
+    }
+
     WCHAR *environment = GetEnvironmentStringsW();
     size_t command_len = wide_length(command);
     size_t max_args = command_len / 2 + 2;
@@ -153,10 +194,9 @@ __attribute__((noreturn)) void mainCRTStartup(void)
     unsigned char *random;
     int result;
 
-    command_copy = VirtualAlloc(0, (command_len + 1) * sizeof(WCHAR),
-                                MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    wide_argv = VirtualAlloc(0, max_args * sizeof(WCHAR *),
-                             MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    /* Alocado em VA fixa alta (hialloc) pra não colidir no filho do fork. */
+    command_copy = hialloc((command_len + 1) * sizeof(WCHAR));
+    wide_argv = hialloc(max_args * sizeof(WCHAR *));
     if (!command_copy || !wide_argv || !environment) ExitProcess(127);
     argc = split_command_line(command, command_copy, command_len + 1,
                               wide_argv, (int)max_args);
@@ -168,8 +208,7 @@ __attribute__((noreturn)) void mainCRTStartup(void)
     pointer_count = (size_t)argc + 1 + envc + 1;
     allocation_size = pointer_count * sizeof(char *) +
                       aux_pairs * 2 * sizeof(size_t) + 32 + string_bytes;
-    allocation = VirtualAlloc(0, allocation_size, MEM_RESERVE | MEM_COMMIT,
-                              PAGE_READWRITE);
+    allocation = hialloc(allocation_size);
     if (!allocation) ExitProcess(127);
     argv = (char **)allocation;
     envp = argv + argc + 1;

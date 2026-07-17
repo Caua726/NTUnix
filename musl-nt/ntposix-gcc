@@ -81,6 +81,7 @@ fi
 [ -n "$output" ] || output=a.exe
 x86_64-w64-mingw32-gcc -fuse-ld=lld -nostdlib -nodefaultlibs \
     -Wl,--entry=mainCRTStartup -Wl,--subsystem,console \
+    -Wl,--disable-dynamicbase -Wl,--disable-high-entropy-va \
     -Wl,--gc-sections -Wl,-u,__errno_location \
     -o "$output" "$root/build/crt0.o" "${link_args[@]}" \
     -Wl,--whole-archive "$root/build/libc-nt.a" -Wl,--no-whole-archive \
