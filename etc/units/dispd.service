@@ -1,0 +1,11 @@
+# dispd — display server / compositor do NTUnix
+[Unit]
+Description=NTUnix display server (compositor)
+
+[Service]
+ExecStart=/system/bin/dispd.exe
+Restart=always
+MemoryMax=128M
+
+[Install]
+WantedBy=default.target

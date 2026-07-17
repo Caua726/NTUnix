@@ -1,0 +1,12 @@
+# ntwm — window manager tiling (trocavel: ntctl restart ntwm nao derruba o dispd)
+[Unit]
+Description=NTUnix window manager
+Requires=dispd
+
+[Service]
+ExecStart=/system/bin/ntwm.exe
+Restart=always
+MemoryMax=32M
+
+[Install]
+WantedBy=default.target
