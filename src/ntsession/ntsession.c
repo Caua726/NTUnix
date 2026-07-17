@@ -61,10 +61,11 @@ int main(void)
             Sleep(100);
     }
 
-    /* terminal da sessao, ressuscitado se fechar */
-    char term[MAX_PATH + 64];
+    /* terminal da sessao: abre o shell Unix (ash). Via cmd /K para que, se o
+     * ash sair ou falhar, a sessao caia num cmd em vez de morrer. */
+    char term[MAX_PATH + 128];
     snprintf(term, sizeof term,
-             "cmd.exe /K \"cd /d %s && echo NTUnix %s — use ntctl list\"",
+             "cmd.exe /K \"cd /d %s && title NTUnix %s && system\\bin\\busybox.exe ash -i\"",
              ntu_root(), NTU_VERSION);
     for (;;) {
         PROCESS_INFORMATION pi;
