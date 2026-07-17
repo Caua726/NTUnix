@@ -209,6 +209,16 @@ __attribute__((noreturn)) void mainCRTStartup(void)
 
     SetConsoleCP(CP_UTF8);
     SetConsoleOutputCP(CP_UTF8);
+    /* Modo VT de saída: o console passa a interpretar sequências ANSI (cor,
+     * movimento de cursor). O line-editing do shell e programas coloridos
+     * dependem disso; a entrada VT (setas) é ligada no modo raw do termios. */
+    {
+        HANDLE console_out = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD console_mode;
+        if (GetConsoleMode(console_out, &console_mode))
+            SetConsoleMode(console_out,
+                           console_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    }
     result = __libc_start_main(main, argc, argv, 0, 0, 0);
     ExitProcess((UINT)result);
 }

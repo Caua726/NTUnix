@@ -73,8 +73,15 @@ static nt_sc_t termios_set(struct nt_fd *slot, const struct nt_termios *tio)
     if (slot->kind != NT_FD_CONSOLE || !GetConsoleMode(slot->handle, &mode))
         return -NT_ENOTTY;
     /* preserva os bits que não gerencio; reaplica a disciplina de linha */
-    mode &= ~(DWORD)(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
-    if (tio->c_lflag & NT_ICANON) mode |= ENABLE_LINE_INPUT;
+    mode &= ~(DWORD)(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT |
+                     ENABLE_VIRTUAL_TERMINAL_INPUT);
+    if (tio->c_lflag & NT_ICANON) {
+        mode |= ENABLE_LINE_INPUT;
+    } else {
+        /* raw (ex.: line-editing do shell): a entrada VT entrega as setas e
+         * outras teclas como sequências ESC, que é o que o editor lê. */
+        mode |= ENABLE_VIRTUAL_TERMINAL_INPUT;
+    }
     if (tio->c_lflag & NT_ECHO)   mode |= ENABLE_ECHO_INPUT;
     if (tio->c_lflag & NT_ISIG)   mode |= ENABLE_PROCESSED_INPUT;
     if (!SetConsoleMode(slot->handle, mode))
