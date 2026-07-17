@@ -41,7 +41,22 @@ static nt_sc_t ppoll_backend(nt_sc_t fds, nt_sc_t count, nt_sc_t timeout_arg)
     return nt_sys_poll(fds, count, milliseconds);
 }
 
+static NT_SYSV_ABI nt_sc_t nt_syscall_dispatch(nt_sc_t, nt_sc_t, nt_sc_t,
+                                               nt_sc_t, nt_sc_t, nt_sc_t, nt_sc_t);
+
+/* Choke point de TODAS as syscalls. Entrega sinais pendentes (SIGINT/Ctrl-C
+ * etc.) na volta — os handlers Unix rodam aqui, na thread principal, em ponto
+ * seguro (fora do meio de uma operação Win32). */
 NT_SYSV_ABI nt_sc_t __nt_syscall(nt_sc_t n, nt_sc_t a1, nt_sc_t a2,
+                                 nt_sc_t a3, nt_sc_t a4, nt_sc_t a5,
+                                 nt_sc_t a6)
+{
+    nt_sc_t r = nt_syscall_dispatch(n, a1, a2, a3, a4, a5, a6);
+    nt_deliver_pending_signals();
+    return r;
+}
+
+static NT_SYSV_ABI nt_sc_t nt_syscall_dispatch(nt_sc_t n, nt_sc_t a1, nt_sc_t a2,
                                  nt_sc_t a3, nt_sc_t a4, nt_sc_t a5,
                                  nt_sc_t a6)
 {
@@ -100,6 +115,10 @@ NT_SYSV_ABI nt_sc_t __nt_syscall(nt_sc_t n, nt_sc_t a1, nt_sc_t a2,
     case NT_SYS_exit: return nt_sys_exit(a1);
     case NT_SYS_wait4: return nt_sys_wait4(a1, a2, a3, a4);
     case NT_SYS_kill: return nt_sys_kill(a1, a2);
+    /* tkill(tid,sig)/tgkill(tgid,tid,sig): single-thread => sempre self ->
+     * entrega local (é o que raise()/abort() da musl usam). */
+    case NT_SYS_tkill: return nt_signal_post_local((int)a2);
+    case NT_SYS_tgkill: return nt_signal_post_local((int)a3);
     case NT_SYS_fcntl: return nt_sys_fcntl(a1, a2, a3);
     case NT_SYS_fsync:
     case NT_SYS_fdatasync: return nt_sys_fsync(a1);

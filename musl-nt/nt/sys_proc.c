@@ -319,6 +319,10 @@ nt_sc_t nt_sys_kill(nt_sc_t pid, nt_sc_t sig)
 {
     HANDLE process;
     if (pid <= 0) return -NT_ENOSYS;
+    /* kill(self, sig): entrega local — marca pendente e o handler roda no
+     * retorno desta syscall (então raise()/abort() funcionam). */
+    if ((DWORD)pid == GetCurrentProcessId())
+        return sig ? nt_signal_post_local((int)sig) : 0;
     process = OpenProcess(sig ? PROCESS_TERMINATE | SYNCHRONIZE : SYNCHRONIZE,
                           FALSE, (DWORD)pid);
     if (!process) return nt_last_error();

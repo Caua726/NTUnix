@@ -179,6 +179,9 @@ static nt_sc_t transfer_read(struct nt_fd *slot, void *buf, uint64_t count)
     if (!ReadFile(slot->handle, buf, amount, &got, 0)) {
         DWORD e = GetLastError();
         if (e == ERROR_BROKEN_PIPE || e == ERROR_HANDLE_EOF) return 0;
+        /* CancelSynchronousIo (Ctrl-C acordando um read bloqueado) -> EINTR;
+         * o sinal pendente é entregue no retorno da syscall. */
+        if (e == ERROR_OPERATION_ABORTED) return -NT_EINTR;
         return nt_error(e);
     }
     /* console em modo cooked entrega linhas com \r\n; um terminal Unix

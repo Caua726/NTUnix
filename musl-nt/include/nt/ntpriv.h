@@ -199,6 +199,13 @@ nt_sc_t nt_sys_gettimeofday(nt_sc_t tv, nt_sc_t tz);
 nt_sc_t nt_sys_ioctl(nt_sc_t fd, nt_sc_t request, nt_sc_t arg);
 nt_sc_t nt_sys_rt_sigaction(nt_sc_t sig, nt_sc_t act, nt_sc_t oldact, nt_sc_t size);
 nt_sc_t nt_sys_rt_sigprocmask(nt_sc_t how, nt_sc_t set, nt_sc_t oldset, nt_sc_t size);
+
+/* entrega de sinais (SIGINT/Ctrl-C etc.): instala o handler de console e a
+ * thread principal (crt0); nt_deliver roda os handlers pendentes na thread
+ * atual (chamado após cada syscall); post_local é o kill(self, sig). */
+void nt_install_signals(void);
+void nt_deliver_pending_signals(void);
+int nt_signal_post_local(int sig);
 nt_sc_t nt_sys_futex(nt_sc_t address, nt_sc_t operation, nt_sc_t value, nt_sc_t timeout,
                   nt_sc_t address2, nt_sc_t value3);
 

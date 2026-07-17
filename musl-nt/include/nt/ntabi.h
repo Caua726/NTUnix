@@ -181,7 +181,9 @@ typedef int64_t nt_sc_t;
 #define NT_SYS_setpriority        141
 #define NT_SYS_sync               162
 #define NT_SYS_gettid             186
+#define NT_SYS_tkill              200
 #define NT_SYS_time               201
+#define NT_SYS_tgkill             234
 #define NT_SYS_sched_getaffinity  204
 #define NT_SYS_futex              202
 #define NT_SYS_getdents64         217

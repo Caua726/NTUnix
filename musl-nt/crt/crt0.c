@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+extern void nt_install_signals(void); /* backend: entrega de sinais (Ctrl-C) */
 extern int __attribute__((sysv_abi)) main(int, char **, char **);
 extern int __attribute__((sysv_abi))
 __libc_start_main(int (__attribute__((sysv_abi)) *)(int, char **, char **),
@@ -258,6 +259,9 @@ __attribute__((noreturn)) void mainCRTStartup(void)
             SetConsoleMode(console_out,
                            console_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
     }
+    /* entrega de sinais: instala o handler de Ctrl-C do console e registra a
+     * thread principal (só no processo normal; o filho de fork() pula o crt0). */
+    nt_install_signals();
     result = __libc_start_main(main, argc, argv, 0, 0, 0);
     ExitProcess((UINT)result);
 }
