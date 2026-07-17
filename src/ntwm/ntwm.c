@@ -21,12 +21,18 @@ unsigned g_mod = MOD_ALT;
 static void cfg_kv(const char *sec, const char *key, const char *val, void *ud)
 {
     (void)sec; (void)ud;
-    if (!_stricmp(key, "nmaster"))      g_nmaster = atoi(val);
-    else if (!_stricmp(key, "mfact"))   g_mfact = (float)atof(val);
-    else if (!_stricmp(key, "gap"))     g_gap = atoi(val);
-    else if (!_stricmp(key, "border"))  g_border = atoi(val);
-    else if (!_stricmp(key, "mod"))
+    /* tudo clampeado para nao gerar geometria absurda (#34) */
+    if (!_stricmp(key, "nmaster")) {
+        int v = atoi(val); g_nmaster = v < 0 ? 0 : (v > 16 ? 16 : v);
+    } else if (!_stricmp(key, "mfact")) {
+        double f = atof(val); if (f >= 0.05 && f <= 0.95) g_mfact = (float)f;
+    } else if (!_stricmp(key, "gap")) {
+        int v = atoi(val); g_gap = v < 0 ? 0 : (v > 200 ? 200 : v);
+    } else if (!_stricmp(key, "border")) {
+        int v = atoi(val); g_border = v < 0 ? 0 : (v > 32 ? 32 : v);
+    } else if (!_stricmp(key, "mod")) {
         g_mod = !_stricmp(val, "win") ? MOD_WIN : MOD_ALT;
+    }
 }
 
 void load_config(void)

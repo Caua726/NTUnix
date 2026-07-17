@@ -98,32 +98,42 @@ void send_frame(void)
                 continue;
             int x, y, w, h;
             if (i < nm) {
-                h = (wh - (nm - 1) * g) / nm;
+                int base = (wh - (nm - 1) * g) / nm;
+                y = wy + i * (base + g);
+                h = (i == nm - 1) ? (wy + wh - y) : base;   /* #33 resto no ultimo */
                 x = wx;
-                y = wy + i * (h + g);
                 w = (ns == 0) ? ww : mw;
             } else {
                 int idx = i - nm;
-                h = (wh - (ns - 1) * g) / ns;
-                x = wx + mw + g;
-                y = wy + idx * (h + g);
-                w = ww - mw - g;
+                int base = (wh - (ns - 1) * g) / ns;
+                y = wy + idx * (base + g);
+                h = (idx == ns - 1) ? (wy + wh - y) : base;
+                x = wx + (mw > 0 ? mw + g : 0);            /* #32 nmaster=0 sem gap */
+                w = ww - mw - (mw > 0 ? g : 0);
             }
             if (h < 1) h = 1;
+            if (w < 1) w = 1;
             wm_send("%s %u %d %d %d %d %d %d", CMD_PLACE, c->id, x, y, w, h,
                     g_curws, i);
             i++;
         }
     }
 
-    /* floating: centralizado, por cima (z alto) */
+    /* floating: cascata, focado por cima (#30 sem sobrepor total, #31) */
+    int fi = 0;
     for (Client *c = g_clients; c; c = c->next) {
         if (c->ws != g_curws || !c->floating)
             continue;
         int w = g_ww / 2, h = g_wh / 2;
-        int x = g_wx + (g_ww - w) / 2, y = g_wy + (g_wh - h) / 2;
+        int step = fi * 28;
+        int x = g_wx + (g_ww - w) / 2 + step;
+        int y = g_wy + (g_wh - h) / 2 + step;
+        if (x + w > g_wx + g_ww) x = g_wx + g_ww - w;
+        if (y + h > g_wy + g_wh) y = g_wy + g_wh - h;
+        int z = (c == g_focused) ? 2000 : (1000 + fi);
         wm_send("%s %u %d %d %d %d %d %d", CMD_PLACE, c->id, x, y, w, h,
-                g_curws, 1000);
+                g_curws, z);
+        fi++;
     }
 
     /* sempre manda FOCUS (0 = limpa) para nao deixar foco no ws antigo (#6) */

@@ -132,6 +132,7 @@ static int conpty_start(Terminal *t, const char *cmdline, int cols, int rows)
 
     CloseHandle(pi.hThread);
     c->hproc = pi.hProcess;
+    t->pid = pi.dwProcessId;
     c->reader = CreateThread(NULL, 0, reader_main, t, 0, NULL);
     if (!c->reader) {              /* sem leitora o terminal fica morto */
         TerminateProcess(pi.hProcess, 1);
@@ -180,12 +181,14 @@ static void conpty_close(Terminal *t)
      * (reader chega no EOF e sai), depois fecha os pipes. */
     if (c->hpc)
         p_Close(c->hpc);
+    /* fecha a ponta de leitura ANTES de esperar: desbloqueia a thread leitora
+     * na hora, garantindo que ela saiu antes do free (#16 use-after-free). */
+    if (c->out_r) { CloseHandle(c->out_r); c->out_r = NULL; }
     if (c->reader) {
-        WaitForSingleObject(c->reader, 2000);
+        WaitForSingleObject(c->reader, 5000);
         CloseHandle(c->reader);
     }
     if (c->in_w)  CloseHandle(c->in_w);
-    if (c->out_r) CloseHandle(c->out_r);
     if (c->hproc) CloseHandle(c->hproc);
     free(c);
     t->impl = NULL;

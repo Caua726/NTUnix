@@ -146,6 +146,7 @@ static int scrape_start(Terminal *t, const char *cmdline, int cols, int rows)
         goto fail;
     CloseHandle(pi.hThread);
     s->hproc = pi.hProcess;
+    t->pid = pi.dwProcessId;
     s->reader = CreateThread(NULL, 0, reader_main, t, 0, NULL);
     if (!s->reader) {
         TerminateProcess(pi.hProcess, 1);
@@ -193,9 +194,14 @@ static void scrape_resize(Terminal *t, int cols, int rows)
     Scrape *s = (Scrape *)t->impl;
     if (!s)
         return;
-    COORD bs = { (SHORT)(cols > 0 ? cols : 1), (SHORT)(rows > 0 ? rows : 1) };
+    if (cols < 1) cols = 1;
+    if (rows < 1) rows = 1;
+    /* encolher: janela ANTES do buffer (Windows exige janela <= buffer) — #64 */
+    SMALL_RECT minw = { 0, 0, 0, 0 };
+    SetConsoleWindowInfo(s->conout, TRUE, &minw);
+    COORD bs = { (SHORT)cols, (SHORT)rows };
     SetConsoleScreenBufferSize(s->conout, bs);
-    SMALL_RECT wr = { 0, 0, (SHORT)(bs.X - 1), (SHORT)(bs.Y - 1) };
+    SMALL_RECT wr = { 0, 0, (SHORT)(cols - 1), (SHORT)(rows - 1) };
     SetConsoleWindowInfo(s->conout, TRUE, &wr);
 }
 

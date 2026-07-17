@@ -54,6 +54,7 @@ void term_resize(Terminal *t, int cols, int rows)
     if (rows < 1) rows = 1;
     EnterCriticalSection(&t->lock);
     vt_resize(t, cols, rows);
+    t->dirty = 1;              /* #12: re-renderiza apos resize (evita ficar preto) */
     LeaveCriticalSection(&t->lock);
     if (t->be && t->be->resize)
         t->be->resize(t, cols, rows);

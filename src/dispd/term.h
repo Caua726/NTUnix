@@ -38,6 +38,7 @@ typedef struct Terminal {
     volatile int dirty;       /* conteudo mudou desde o ultimo render */
     volatile int alive;       /* filho ainda vivo */
     volatile long rx;         /* diagnostico: bytes vindos do filho */
+    DWORD  pid;               /* PID do processo filho (#41) */
 
     struct Window *win;       /* dono (usado pelo compositor, nao pelo vt) */
     CRITICAL_SECTION lock;    /* grade tocada pela thread leitora */

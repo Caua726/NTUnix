@@ -52,6 +52,7 @@ Window *spawn_terminal(const char *cmdline)
         win_destroy(w);
         return NULL;
     }
+    w->pid = w->term->pid;   /* #41 */
     win_focus(w);
     wmproto_ev_created(w);
     dispd_log("terminal criado (id %u, backend %s)", w->id,
@@ -130,11 +131,11 @@ static void selftest_frame(void)
         g_srv.present->present(g_srv.present, &g_srv.frame);
 }
 
-static void frame_tick(void)
+static int frame_tick(void)   /* retorna 1 se apresentou um quadro */
 {
     if (g_srv.selftest) {
         selftest_frame();
-        return;
+        return 1;
     }
     wmproto_drain();
     appsrv_drain();
@@ -148,7 +149,7 @@ static void frame_tick(void)
     static int frame_wait;
     if (g_srv.in_frame) {
         if (++frame_wait > 60) { g_srv.in_frame = 0; frame_wait = 0; }
-        return;
+        return 0;
     }
     frame_wait = 0;
 
@@ -166,6 +167,7 @@ static void frame_tick(void)
         compose_and_present();
         g_srv.dirty = 0;
     }
+    return need;
 }
 
 static LRESULT CALLBACK root_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
@@ -316,8 +318,11 @@ int main(void)
             }
             DispatchMessageA(&msg);   /* sem TranslateMessage: teclas em root_proc */
         }
-        frame_tick();
-        Sleep(16);                    /* ~60 fps */
+        int presented = frame_tick();
+        int dxgi = g_srv.present && g_srv.present->name &&
+                   !strcmp(g_srv.present->name, "dxgi");
+        if (!(presented && dxgi))
+            Sleep(16);   /* DXGI Present(1,0) ja pacea no vsync (#56) */
     }
     return 0;
 }

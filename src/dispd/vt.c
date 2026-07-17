@@ -174,9 +174,17 @@ static void csi_dispatch(Terminal *t, unsigned char final)
         break;
     }
     case 'J':   /* ED */
-        if (a0 == 2)      clear_region(t, 0, 0, t->cols - 1, t->rows - 1);
-        else if (a0 == 1) clear_region(t, 0, 0, t->cols - 1, t->cur_y);
-        else              clear_region(t, t->cur_x, t->cur_y, t->cols - 1, t->rows - 1);
+        if (a0 == 2) {
+            clear_region(t, 0, 0, t->cols - 1, t->rows - 1);
+        } else if (a0 == 1) {   /* inicio da tela ate o cursor (#60) */
+            if (t->cur_y > 0)
+                clear_region(t, 0, 0, t->cols - 1, t->cur_y - 1);
+            clear_region(t, 0, t->cur_y, t->cur_x, t->cur_y);
+        } else {                /* cursor ate o fim da tela (#59) */
+            clear_region(t, t->cur_x, t->cur_y, t->cols - 1, t->cur_y);
+            if (t->cur_y < t->rows - 1)
+                clear_region(t, 0, t->cur_y + 1, t->cols - 1, t->rows - 1);
+        }
         break;
     case 'K':   /* EL */
         if (a0 == 2)      clear_region(t, 0, t->cur_y, t->cols - 1, t->cur_y);
@@ -328,7 +336,7 @@ void vt_render(Terminal *t, HDC memdc, HFONT font, int cellw, int cellh)
             RECT rc = { x * cellw, y * cellh, (x + bn) * cellw, (y + 1) * cellh };
             ExtTextOutA(memdc, x * cellw, y * cellh, ETO_OPAQUE | ETO_CLIPPED,
                         &rc, buf, bn, NULL);
-            x += run;
+            x += bn;   /* avanca so o que foi desenhado (#61: nao pula run>511) */
         }
     }
 

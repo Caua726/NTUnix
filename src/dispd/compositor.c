@@ -46,7 +46,9 @@ static void free_dib(HDC dc, HBITMAP bmp)
 void compositor_init(void)
 {
     /* backbuffer composto do tamanho da tela */
-    make_dib(g_srv.scr_w, g_srv.scr_h, &g_srv.cdc, &g_srv.cdib, &g_srv.cbits);
+    if (make_dib(g_srv.scr_w, g_srv.scr_h, &g_srv.cdc, &g_srv.cdib, &g_srv.cbits) != 0)
+        dispd_log("compositor: backbuffer principal falhou (%dx%d) (#51)",
+                  g_srv.scr_w, g_srv.scr_h);
 
     g_srv.frame.memdc = g_srv.cdc;
     g_srv.frame.dib = g_srv.cdib;
@@ -304,25 +306,33 @@ static void draw_bar(void)
         x += sz.cx;
     }
 
-    /* titulo do focado */
-    x += pad;
-    if (g_srv.focused && g_srv.focused->title[0]) {
-        SetTextColor(dc, RGB(200, 200, 210));
-        TextOutA(dc, x, ty, g_srv.focused->title,
-                 (int)strlen(g_srv.focused->title));
-    }
-
-    /* diagnostico + relogio (direita): "k:<teclas> <backend> <data hora>" */
-    const char *be = "-";
-    if (g_srv.focused && g_srv.focused->term && g_srv.focused->term->be)
-        be = g_srv.focused->term->be->name;
+    /* relogio (direita) — computa primeiro pra limitar o titulo. k:<teclas> e
+     * backend so em DISPD_DEBUG (#36). */
     char tm[32], ts[80];
     ntu_now(tm, sizeof tm);
-    snprintf(ts, sizeof ts, "k:%ld %s  %s", g_srv.keys_seen, be, tm);
+    if (g_srv.debug) {
+        const char *be = (g_srv.focused && g_srv.focused->term &&
+                          g_srv.focused->term->be)
+                             ? g_srv.focused->term->be->name : "-";
+        snprintf(ts, sizeof ts, "k:%ld %s  %s", g_srv.keys_seen, be, tm);
+    } else {
+        snprintf(ts, sizeof ts, "%s", tm);
+    }
     SIZE cs;
     GetTextExtentPoint32A(dc, ts, (int)strlen(ts), &cs);
+    int clock_x = g_srv.scr_w - cs.cx - pad / 2;
+
+    /* titulo do focado, clipado antes do relogio (#36 sem atravessar) */
+    x += pad;
+    if (g_srv.focused && g_srv.focused->title[0] && clock_x - x > 20) {
+        SetTextColor(dc, RGB(200, 200, 210));
+        RECT trc = { x, 0, clock_x - pad, g_srv.bar_h };
+        DrawTextA(dc, g_srv.focused->title, -1, &trc,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
+
     SetTextColor(dc, RGB(150, 150, 170));
-    TextOutA(dc, g_srv.scr_w - cs.cx - pad / 2, ty, ts, (int)strlen(ts));
+    TextOutA(dc, clock_x, ty, ts, (int)strlen(ts));
 
     SelectObject(dc, of);
 }
@@ -380,7 +390,10 @@ void compose_and_present(void)
             char lbl[320];
             const char *base = w->title[0] ? w->title
                              : (w->kind == WK_TERM ? "terminal" : "app");
-            if (w->kind == WK_TERM && w->term)
+            /* diagnostico so em DISPD_DEBUG ou quando o terminal esta quebrado
+             * (rx=0 ou morto) — UI limpa no uso normal (#36) */
+            if (w->kind == WK_TERM && w->term &&
+                (g_srv.debug || w->term->rx == 0 || !w->term->alive))
                 snprintf(lbl, sizeof lbl, "%s  [%s rx:%ld a:%d]", base,
                          w->term->be ? w->term->be->name : "?",
                          w->term->rx, w->term->alive);
