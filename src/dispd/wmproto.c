@@ -80,7 +80,10 @@ static void wm_send(const char *line)
         if (WaitForSingleObject(g_wev, 2000) == WAIT_OBJECT_0)
             ok = GetOverlappedResult(g_pipe, &g_wov, &w, FALSE);
         else {
+            /* espera o cancelamento TERMINAR antes de reusar g_wov (#74): o
+             * kernel ainda pode tocar g_wov ate a I/O cancelada completar. */
             CancelIoEx(g_pipe, &g_wov);
+            GetOverlappedResult(g_pipe, &g_wov, &w, TRUE);
             ok = FALSE;
         }
     }
@@ -225,18 +228,25 @@ static void apply(char *line)
     } else if (!strcmp(v, CMD_PLACE) && n >= 8) {
         Window *w = win_find((unsigned)strtoul(av[1], NULL, 10));
         if (w) {
-            int x = atoi(av[2]), y = atoi(av[3]);
-            int ww = atoi(av[4]), hh = atoi(av[5]);
+            /* parse largo + clamp: origem e tamanho de um WM malformado nao
+             * podem estourar o RECT (int) na soma x+ww (#42). */
+            long x = strtol(av[2], NULL, 10), y = strtol(av[3], NULL, 10);
+            long ww = strtol(av[4], NULL, 10), hh = strtol(av[5], NULL, 10);
+            long xlim = (long)g_srv.scr_w * 4, ylim = (long)g_srv.scr_h * 4;
             if (ww < 1) ww = 1;
             if (hh < 1) hh = 1;
-            if (ww > g_srv.scr_w * 4) ww = g_srv.scr_w * 4;   /* clamp (#44) */
-            if (hh > g_srv.scr_h * 4) hh = g_srv.scr_h * 4;
-            w->rect.left = x; w->rect.top = y;
-            w->rect.right = x + ww; w->rect.bottom = y + hh;
-            w->ws = atoi(av[6]);
+            if (ww > xlim) ww = xlim;
+            if (hh > ylim) hh = ylim;
+            if (x < -xlim) x = -xlim; else if (x > xlim) x = xlim;
+            if (y < -ylim) y = -ylim; else if (y > ylim) y = ylim;
+            int ws = atoi(av[6]);
+            if (ws < 0 || ws >= 32) ws = w->ws;               /* valida ws (#43) */
+            w->rect.left = (int)x; w->rect.top = (int)y;
+            w->rect.right = (int)(x + ww); w->rect.bottom = (int)(y + hh);
+            w->ws = ws;
             w->z = atoi(av[7]);
             int bp = w->border_px * 2;
-            win_set_client_size(w, ww - bp, hh - bp - g_srv.title_h);
+            win_set_client_size(w, (int)ww - bp, (int)hh - bp - g_srv.title_h);
         }
     } else if (!strcmp(v, CMD_FOCUS) && n >= 2) {
         win_focus(win_find((unsigned)strtoul(av[1], NULL, 10)));  /* 0 -> NULL */

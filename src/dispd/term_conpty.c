@@ -170,7 +170,9 @@ static void conpty_resize(Terminal *t, int cols, int rows)
     COORD size;
     size.X = (SHORT)(cols > 0 ? cols : 1);
     size.Y = (SHORT)(rows > 0 ? rows : 1);
-    p_Resize(c->hpc, size);   /* reader continua vivo -> sem deadlock */
+    HRESULT hr = p_Resize(c->hpc, size);   /* reader continua vivo -> sem deadlock */
+    if (FAILED(hr))                        /* #90 */
+        dispd_log("conpty: ResizePseudoConsole falhou (0x%lx)", (unsigned long)hr);
 }
 
 static void conpty_close(Terminal *t)
@@ -183,14 +185,24 @@ static void conpty_close(Terminal *t)
     if (c->hpc)
         p_Close(c->hpc);
     /* fecha a ponta de leitura ANTES de esperar: desbloqueia a thread leitora
-     * na hora, garantindo que ela saiu antes do free (#16 use-after-free). */
+     * na hora (ReadFile -> EOF). */
     if (c->out_r) { CloseHandle(c->out_r); c->out_r = NULL; }
     if (c->reader) {
-        WaitForSingleObject(c->reader, 5000);
+        /* join GARANTIDO antes do free — sem isso o reader ainda usaria o
+         * Terminal ja liberado (#87). Se travar (ex.: escrevendo resposta a
+         * uma query no in_w cheio), destrava matando o filho e fechando in_w. */
+        if (WaitForSingleObject(c->reader, 2000) != WAIT_OBJECT_0) {
+            if (c->hproc) TerminateProcess(c->hproc, 0);
+            if (c->in_w) { CloseHandle(c->in_w); c->in_w = NULL; }
+            WaitForSingleObject(c->reader, INFINITE);
+        }
         CloseHandle(c->reader);
     }
     if (c->in_w)  CloseHandle(c->in_w);
-    if (c->hproc) CloseHandle(c->hproc);
+    if (c->hproc) {
+        TerminateProcess(c->hproc, 0);   /* #93: garante o fim do filho */
+        CloseHandle(c->hproc);
+    }
     free(c);
     t->impl = NULL;
 }

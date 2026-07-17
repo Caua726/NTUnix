@@ -43,12 +43,15 @@ static void free_dib(HDC dc, HBITMAP bmp)
     if (bmp) DeleteObject(bmp);
 }
 
-void compositor_init(void)
+int compositor_init(void)
 {
-    /* backbuffer composto do tamanho da tela */
-    if (make_dib(g_srv.scr_w, g_srv.scr_h, &g_srv.cdc, &g_srv.cdib, &g_srv.cbits) != 0)
-        dispd_log("compositor: backbuffer principal falhou (%dx%d) (#51)",
+    /* backbuffer composto do tamanho da tela — sem ele nao ha o que compor,
+     * entao aborta a inicializacao em vez de seguir com DC nulo (#95). */
+    if (make_dib(g_srv.scr_w, g_srv.scr_h, &g_srv.cdc, &g_srv.cdib, &g_srv.cbits) != 0) {
+        dispd_log("compositor: backbuffer principal falhou (%dx%d)",
                   g_srv.scr_w, g_srv.scr_h);
+        return -1;
+    }
 
     g_srv.frame.memdc = g_srv.cdc;
     g_srv.frame.dib = g_srv.cdib;
@@ -57,15 +60,24 @@ void compositor_init(void)
     g_srv.frame.h = g_srv.scr_h;
     g_srv.frame.stride = g_srv.scr_w * 4;
 
-    /* fonte monoespacada garantida no WinPE */
+    /* fonte monoespacada garantida no WinPE; metricas com defaults se algo
+     * falhar (#96: nao le TEXTMETRIC nao inicializado) */
     g_srv.font = (HFONT)GetStockObject(OEM_FIXED_FONT);
+    g_srv.cellw = 8;
+    g_srv.cellh = 16;
     HDC dc = CreateCompatibleDC(NULL);
-    SelectObject(dc, g_srv.font);
-    TEXTMETRICA tm;
-    GetTextMetricsA(dc, &tm);
-    g_srv.cellw = tm.tmAveCharWidth > 0 ? tm.tmAveCharWidth : 8;
-    g_srv.cellh = tm.tmHeight > 0 ? tm.tmHeight : 16;
-    DeleteDC(dc);
+    if (dc) {
+        TEXTMETRICA tm;
+        ZeroMemory(&tm, sizeof tm);
+        HGDIOBJ of = SelectObject(dc, g_srv.font);
+        if (GetTextMetricsA(dc, &tm)) {
+            if (tm.tmAveCharWidth > 0) g_srv.cellw = tm.tmAveCharWidth;
+            if (tm.tmHeight > 0)       g_srv.cellh = tm.tmHeight;
+        }
+        SelectObject(dc, of);
+        DeleteDC(dc);
+    }
+    return 0;
 }
 
 Window *win_create(WinKind kind, int cw, int ch)

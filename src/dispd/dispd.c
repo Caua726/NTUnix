@@ -273,7 +273,10 @@ int main(void)
     ShowWindow(g_srv.root, SW_SHOW);
     force_foreground(g_srv.root);
 
-    compositor_init();
+    if (compositor_init() != 0) {   /* #95: sem backbuffer nao ha compositor */
+        dispd_log("compositor_init falhou — abortando");
+        return 1;
+    }
     g_srv.bar_h = g_srv.cellh + 6;
     g_srv.title_h = g_srv.cellh + 4;   /* barra de titulo por janela */
     char nt[8] = "";

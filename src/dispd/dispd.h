@@ -80,7 +80,7 @@ extern Server g_srv;
 #define BORDER_FOCUS   RGB(122, 162, 247)
 
 /* compositor.c */
-void     compositor_init(void);
+int      compositor_init(void);   /* 0=ok, -1=backbuffer falhou (#95) */
 Window  *win_create(WinKind kind, int cw, int ch);
 Window  *win_create_shared(int cw, int ch, HANDLE section); /* WK_APP: DIB sobre section */
 void     win_destroy(Window *w);

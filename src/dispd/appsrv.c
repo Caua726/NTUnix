@@ -110,7 +110,13 @@ static void app_send(AppConn *c, const char *line)
     if (!ok && GetLastError() == ERROR_IO_PENDING) {
         if (WaitForSingleObject(c->wev, 1000) == WAIT_OBJECT_0)
             ok = GetOverlappedResult(c->pipe, &ov, &w, FALSE);
-        else { CancelIoEx(c->pipe, &ov); ok = FALSE; }
+        else {
+            /* espera o cancel terminar: 'ov' e 'line' sao locais e o kernel
+             * ainda pode escrever neles ate a I/O cancelada completar (#60). */
+            CancelIoEx(c->pipe, &ov);
+            GetOverlappedResult(c->pipe, &ov, &w, TRUE);
+            ok = FALSE;
+        }
     }
     LeaveCriticalSection(&c->wlock);
     if (!ok)

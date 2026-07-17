@@ -214,7 +214,7 @@ static void scrape_close(Terminal *t)
     if (s->hproc)
         TerminateProcess(s->hproc, 0);
     if (s->reader) {
-        WaitForSingleObject(s->reader, 2000);
+        WaitForSingleObject(s->reader, INFINITE);   /* join garantido: sem UAF (#88) */
         CloseHandle(s->reader);
     }
     if (s->conout && s->conout != INVALID_HANDLE_VALUE) CloseHandle(s->conout);

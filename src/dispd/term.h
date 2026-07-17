@@ -133,4 +133,7 @@ void vt_render(Terminal *t, HDC memdc, HFONT font, int cellw, int cellh);
 /* paleta ANSI 0..15 -> RGB (compartilhada com o scrape) */
 COLORREF vt_ansi_color(int idx);
 
+/* log (definido em dispd.c) — disponivel para os backends de terminal */
+void dispd_log(const char *fmt, ...);
+
 #endif
