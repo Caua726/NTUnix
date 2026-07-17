@@ -373,11 +373,19 @@ syscall `NT_SYS_spawn`), override `override/posix_spawn.c` (pula o da musl), `po
 cai nele (sem PATH-search por ora). Registra o filho pro `wait4`. Testado no Wine
 (`test/spawn.c`): spawn+wait+file_actions rodando `hello.exe` (Unix) e `cmd.exe` (Windows).
 
-**Último elo (pendente):** para **digitar um binário externo no shell** e ele rodar, o
-`ash` precisa rotear comando externo por `posix_spawn` em vez de `fork`+`exec`
-(`evalcommand`, ~linha 10607: `forkshell`+`shellexec`) — porque `posix_spawn` só funciona
-no processo pai (não no clone). É testável no Wine (posix_spawn não usa fork). Não feito
-ainda: mexe no core-loop do ash (job control, PATH-search, pipelines).
+**Roteamento no ash (feito):** o `ash` agora roda comando externo real por `posix_spawn`
+em vez de `fork`+`exec` (patch `patches/busybox-ntunix-ash.patch`, helper `spawn_external`
++ hook no `evalcommand`). No **shell principal** (`rootshell`), um comando não-applet é
+resolvido como no `shellexec` (direto se tem `/`,`\` ou `C:`; senão PATH-search), roda via
+`posix_spawn` herdando as redireções já aplicadas e o env de `listvars`, e espera síncrono
+propagando o exit code. Roda binário Unix-para-NTUnix e app Windows. Validado no Wine:
+`ash -c './hello.exe; echo $?'` → saída + rc=0; PATH-search idem.
+
+**Limitação remanescente:** comando externo **dentro de pipeline/subshell/background** roda
+num filho já clonado (`rootshell==0`), onde `posix_spawn` (CreateProcessW) também crasharia
+— então esses seguem o caminho fork+exec antigo (que falha no clone). Fica para depois:
+rotear também os forks de pipeline (`evalpipe`) por `posix_spawn`. Applets nesses contextos
+funcionam (rodam in-process no clone).
 
 ### Deixado como está (limitação estrutural, documentado, não “bug fora do lugar”)
 Entrega de sinal (SIGPIPE/SIGINT/SIGCHLD), grupos de processo/job control, threads
