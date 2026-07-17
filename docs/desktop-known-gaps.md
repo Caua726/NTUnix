@@ -1,68 +1,91 @@
 # Desktop NTUnix (dispd + ntwm) — gaps conhecidos (deferidos)
 
-Itens do review que foram **deliberadamente adiados** (com justificativa), depois
-de corrigir todos os bloqueadores e a maioria dos bugs de correção. Nenhum destes
-impede o uso do desktop; são features grandes, otimizações, ou hardening de baixo
-risco no cenário atual (WinPE/live, single-monitor, VM sem GPU real).
+Este documento lista o que ainda **não** está implementado, com justificativa.
+Ele é a fonte honesta de invariantes: nada aqui afirma que algo está pronto sem
+estar (a auditoria pegou o doc anterior mentindo — #137).
 
-## Renderização / display
+## O que a auditoria profunda apontou e **já foi corrigido**
 
-- **Multi-monitor (#54).** `dispd` nasce em (0,0) com `SM_CXSCREEN/SM_CYSCREEN` e
-  manda um único `OUTPUT`. Suportar vários monitores exige `EnumDisplayMonitors`,
-  um `OUTPUT` por monitor e uma abstração `Monitor` no `ntwm` (cada um com seu
-  layout/nmaster/mfact). A VM de teste é single-monitor → sem como validar agora.
-- **Mudança de resolução/DPI (#53).** Sem `WM_DISPLAYCHANGE`/`WM_DPICHANGED`/
-  `WM_SIZE`; backbuffer, janela raiz e swapchain ficam no tamanho do boot. Precisa
-  tratar esses eventos + recriar backbuffer + chamar `present->resize` (hoje é
-  código morto, parte do #58). Feature real, adiada.
-- **Device loss do DXGI (#55).** `Present`/`Map`/`CopyResource` não checam
-  `DXGI_ERROR_DEVICE_REMOVED`. Num GPU real, um TDR congelaria a imagem. Fix:
-  detectar e recriar device/swapchain, ou cair no backend GDI. Só importa em
-  hardware real com GPU (a VM roda WARP); adiado para quando houver bancada com GPU.
-- **Damage tracking real (#57).** Hoje qualquer mudança recompõe a tela inteira e
-  (no DXGI) sobe o frame inteiro pra GPU. O idle-present já limita a *frequência*
-  (só recompõe quando sujo); falta limitar a *área* (regiões sujas). É otimização,
-  não correção — adiada. Referência: `docs/pesquisa/deep-compositors.md` (damage ring).
-- **>256 janelas (#52).** O compose usa `vis[256]` e o layout embutido `v[64]`.
-  Irreal de atingir num desktop tiling; viraria arrays dinâmicos se algum dia
-  importar. Baixa prioridade.
-- **Código-placeholder (#58).** `Window.dirty`/`Window.visible` e
-  `PresentBackend.resize` existem mas ainda não são exercitados (visibilidade é por
-  `ws==cur_ws`, resize de tela é #53). Mantidos como ganchos para essas features;
-  inofensivos.
+Depois da auditoria de 140 defeitos, foram corrigidos nos commits da branch
+`feat/desktop-dispd-ntwm` (ver `git log`):
 
-## Terminal / VT
+- **Terminal (foco #1).** Emulador VT reescrito como máquina de estados completa
+  (`src/dispd/vt.c`): responde a DSR/CPR/DA (write-back no pty) — era a causa-raiz
+  do ash preto (busybox lineedit travava no `ESC[6n`); tela alternada, região de
+  rolagem, save/restore, IL/DL/ICH/DCH/ECH, SGR 16/256/**truecolor**, UTF-8 em
+  codepoints. (#59-64, #105-114 parcial.)
+- **Transação de layout atômica.** FRAME-BEGIN..COMMIT agora bufferiza e aplica no
+  COMMIT (swap); input/hit-test nunca veem estado parcial; frame travado é
+  descartado, não publicado pela metade. (#21, #27-31.)
+- **Protocolo robusto.** Fila com geração (descarta comandos de conexão morta),
+  resync no overflow, remontagem de fragmentos, validação de versão, guarda de
+  HELLO duplicado, snapshot em ordem estável com floating. (#32-33, #58, #65-72,
+  #77-78, #81-84.)
+- **Input.** Par down/up (sem vazar keyup), fila infalível, mouse encaminhado a
+  apps e terminais (modos DEC/xterm), APP-KEY com ação e codepoint completo.
+  (#8-14, #24, #26.)
+- **Crashes/UAF.** Join garantido no teardown de terminal, OVERLAPPED com espera de
+  cancelamento, backbuffer/grade nulos abortam, overflow de geometria/CSI clampado,
+  `alive`/`rx` atômicos. (#42, #60, #74, #86-88, #90, #93, #95-96, #105, #108-109.)
+- **Apps.** Clipping obrigatório da surface, PID real, close que encerra o processo,
+  quotas anti-DoS, deadline de handshake, checagem de colisão de section, lifecycle
+  de fila infalível pra create/destroy. (#49, #52-56, #91, #128-131.)
+- **Config/layout.** INI por seção, numérico validado, linha longa rejeitada,
+  workspaces unificados, gaps sem altura negativa. (#4, #38-39, #46-48.)
+- **initd.** `AssignProcessToJobObject` checado (aborta o spawn se falhar). (#133.)
 
-- **Render Unicode/UTF-8 (#63).** A ENTRADA já manda UTF-8 (WideCharToMultiByte),
-  mas o renderer é single-byte (CP437 + `OEM_FIXED_FONT`), então multibyte aparece
-  corrompido. Render Unicode de verdade precisa: grade guardando codepoints (não
-  bytes), uma fonte TTF Unicode embutida (`AddFontMemResourceEx`) e text-out wide.
-  É um bloco grande; adiado.
-- **Truecolor (#62).** O parser reconhece `38;2;r;g;b` mas mapeia pra 16 cores.
-  Suportar 24-bit exige `Cell` guardando RGB (não índice) + render por cor real.
-  Adiado (TUIs modernas terão cores aproximadas até lá).
+## Ainda deferido — com justificativa
 
-## Apps (fronteira apps↔dispd)
+### Apps (fronteira apps↔dispd)
+- **Resize negociado (#51).** O compositor já **clipa** a surface ao tile (não
+  invade vizinhos), mas ainda não há `APP-CONFIGURE(serial,w,h)` + ack pro app
+  redesenhar no tamanho do tile. Sem isso, uma app tilada aparece cortada ou com
+  fundo sobrando. Feature real; precisa de protocolo de reconfiguração + recriação
+  de section pelo app. Adiado.
+- **Double-buffering / fence (#50, #57).** `APP-COMMIT` não sincroniza escritor e
+  compositor → pode haver tearing. O repaint periódico (~2×/s) garante que um commit
+  perdido acaba renderizado, mas falta front/back surface com swap atômico. Adiado.
+- **DACL/nome da section (#126, #130).** Os pipes e sections usam DACL padrão; o
+  nome da section agora tem sal (menos previsível) e há checagem de colisão, mas
+  não há restrição de ACL por token/sessão. Num live single-user (tudo SYSTEM) o
+  risco é baixo; endurecer a ACL às cegas arriscaria quebrar a conexão do WM.
+  Adiado até haver como validar numa sessão real.
 
-- **Double-buffering / vsync do app (#47).** `APP-COMMIT` não sincroniza: o app pode
-  escrever na section enquanto o `dispd` faz `BitBlt` → tearing. Fix: protocolo com
-  front/back surface (duas sections) e swap atômico no commit. Feature, adiada.
-- **ACL da section (#48).** Os nomes `ntunix-appsurf-N` são previsíveis e a section
-  é criada com DACL padrão — outro processo da mesma sessão poderia abrir e alterar
-  os pixels de uma janela. Fix: `SECURITY_ATTRIBUTES` restritiva + nome aleatório.
-  Hardening de segurança; num live single-user é baixo risco. Adiado.
+### Terminal / VT
+- **Render Unicode de verdade (#106-107, #116).** A grade já guarda **codepoints**
+  (UTF-8 decodificado; multibyte não corrompe mais em várias células), mas o render
+  usa a fonte OEM (CP437): ASCII e um punhado de box-drawing saem certos, o resto
+  vira `?`. Unicode pleno precisa de fonte TTF embutida + text-out wide. Adiado.
+- **Scrollback / reflow (#113).** Resize preserva o canto superior; não há histórico
+  nem re-quebra de linha. Adiado.
+- **Cursor piscante (#112).** O cursor é bloco fixo. Adiado.
 
-## Input
+### Render / display
+- **Resize de resolução/DPI (#102) e multi-monitor (#103).** Sem
+  `WM_SIZE`/`WM_DISPLAYCHANGE`/`WM_DPICHANGED`; um `OUTPUT`. A VM de teste é
+  single-monitor. Features; adiadas.
+- **Recuperação total de device loss / waitable swapchain (#100, #104).** O DXGI
+  agora **detecta** device removed/reset e para de apresentar (não roda num device
+  morto) e checa `ResizeBuffers`, mas não recria o device nem migra pro GDI em
+  runtime. Só importa em GPU real (a VM roda WARP). Adiado.
+- **Damage tracking / perf (#120-125).** Recompõe a tela inteira quando suja (o
+  idle-present já limita a frequência). Otimização, não correção. Adiado.
 
-- **Escopo do hook global (#20).** O `WH_KEYBOARD_LL` pega teclas do sistema todo;
-  atalhos do WM poderiam ser roubados de outra janela Win32 em foreground. No alvo
-  (WinPE/live, o `dispd` é dono da sessão) isso não acontece na prática. Um fix
-  checaria se a janela em foreground pertence à nossa sessão antes de tratar. Baixa
-  prioridade.
+### Input / protocolo
+- **Raw Input (#139) e escopo do hook (#15/#20).** Ainda usa `WH_KEYBOARD_LL`
+  global; o fallback WM_KEYDOWN/UP agora é robusto (par down/up, sem duplicação),
+  mas a migração pra Raw Input buffered fica pra depois. No alvo (o dispd é dono da
+  sessão) o hook global não rouba de mais ninguém na prática.
+- **Escrita síncrona do ntwm (#76) e heartbeat de liveness (#85).** O ntwm é
+  single-thread síncrono; um `WriteFile` sem timeout pode bloquear se o dispd parar
+  de ler (o dispd tem uma thread leitora dedicada, então na prática drena rápido).
+  Há resync no overflow, mas não um heartbeat que detecte um WM "vivo porém parado".
+  Adiado.
+- **IDs de 64 bits (#94).** Contador `unsigned`; wrap é irreal num desktop tiling.
+  Adiado.
 
----
-
-Tudo o mais do review foi corrigido (ver commits `feat/desktop-dispd-ntwm`). Os
-bloqueadores nomeados no review — surface do app destruída no layout, input de
-apps, foco/workspace divergentes, transações de layout, e hook bloqueante — estão
-resolvidos.
+### UX
+- **Feedback de erro na tela (#7).** Falhas (spawn de terminal, backend) vão só pro
+  log; falta um placeholder/toast visível. Adiado.
+- **Barra/decorações interativas (#2, #3).** A barra e as titlebars são visuais; não
+  respondem a clique (mover/fechar/trocar ws pela barra). Adiado.

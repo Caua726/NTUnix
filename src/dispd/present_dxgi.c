@@ -51,6 +51,7 @@ typedef struct {
     ID3D11Texture2D     *upload;   /* DYNAMIC, WRITE_DISCARD: sem stall no Map */
     ID3D11Texture2D     *back;     /* backbuffer cacheado (estavel no flip D3D11) */
     int w, h;
+    int dead;                      /* device removed/reset: para de apresentar (#100) */
 } DxgiImpl;
 
 /* textura de upload DYNAMIC (referencia mmozeiko pixels.c) — DYNAMIC exige
@@ -135,25 +136,28 @@ static int dxgi_init(PresentBackend *b, HWND root, int w, int h)
 static void dxgi_present(PresentBackend *b, const Frame *f)
 {
     DxgiImpl *g = (DxgiImpl *)b->impl;
-    if (!g->swap || !g->upload || !g->back)
+    if (g->dead || !g->swap || !g->upload || !g->back || !f->bgra)
         return;
 
     D3D11_MAPPED_SUBRESOURCE m;
-    if (SUCCEEDED(ID3D11DeviceContext_Map(g->ctx, (ID3D11Resource *)g->upload,
-                                          0, D3D11_MAP_WRITE_DISCARD, 0, &m))) {
-        const unsigned char *src = (const unsigned char *)f->bgra;
-        unsigned char *dst = (unsigned char *)m.pData;
-        int rows = f->h < g->h ? f->h : g->h;
-        int rowbytes = (f->w < g->w ? f->w : g->w) * 4;
-        for (int y = 0; y < rows; y++)
-            memcpy(dst + (size_t)y * m.RowPitch, src + (size_t)y * f->stride,
-                   (size_t)rowbytes);
-        ID3D11DeviceContext_Unmap(g->ctx, (ID3D11Resource *)g->upload, 0);
-    }
+    /* se o Map falhar, NAO apresenta um frame stale (#99): aborta este present */
+    if (FAILED(ID3D11DeviceContext_Map(g->ctx, (ID3D11Resource *)g->upload,
+                                       0, D3D11_MAP_WRITE_DISCARD, 0, &m)))
+        return;
+    const unsigned char *src = (const unsigned char *)f->bgra;
+    unsigned char *dst = (unsigned char *)m.pData;
+    int rows = f->h < g->h ? f->h : g->h;
+    int rowbytes = (f->w < g->w ? f->w : g->w) * 4;
+    for (int y = 0; y < rows; y++)
+        memcpy(dst + (size_t)y * m.RowPitch, src + (size_t)y * f->stride,
+               (size_t)rowbytes);
+    ID3D11DeviceContext_Unmap(g->ctx, (ID3D11Resource *)g->upload, 0);
 
     ID3D11DeviceContext_CopyResource(g->ctx, (ID3D11Resource *)g->back,
                                      (ID3D11Resource *)g->upload);
-    IDXGISwapChain1_Present(g->swap, 1, 0);   /* vsync */
+    HRESULT hr = IDXGISwapChain1_Present(g->swap, 1, 0);   /* vsync */
+    if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
+        g->dead = 1;   /* #100: para de apresentar em vez de rodar num device morto */
 }
 
 static int dxgi_resize(PresentBackend *b, int w, int h)
@@ -163,8 +167,14 @@ static int dxgi_resize(PresentBackend *b, int w, int h)
     g->h = h;
     if (g->back)   { ID3D11Texture2D_Release(g->back);   g->back = NULL; }
     if (g->upload) { ID3D11Texture2D_Release(g->upload); g->upload = NULL; }
-    if (g->swap)
-        IDXGISwapChain1_ResizeBuffers(g->swap, 0, w, h, DXGI_FORMAT_UNKNOWN, 0);
+    if (g->swap) {
+        HRESULT hr = IDXGISwapChain1_ResizeBuffers(g->swap, 0, w, h,
+                                                   DXGI_FORMAT_UNKNOWN, 0);
+        if (FAILED(hr)) {          /* #101: nao segue com back/upload nulos */
+            g->dead = 1;
+            return -1;
+        }
+    }
     if (get_backbuffer(g) != 0)
         return -1;
     return make_upload(g);

@@ -36,6 +36,8 @@ typedef struct AppConn {
 static AppConn *g_conns;
 static CRITICAL_SECTION g_conns_lock;
 static volatile LONG g_appctr;
+static volatile LONG g_nconns;        /* conexoes vivas (quota anti-DoS #128) */
+#define MAX_APPCONNS 32
 
 typedef enum { AQ_CREATE, AQ_COMMIT, AQ_DESTROY } AqType;
 typedef struct {
@@ -51,12 +53,22 @@ static AqItem g_aq[AQCAP];
 static int g_aqh, g_aqt;
 static CRITICAL_SECTION g_aqlock;
 
-static void aq_push(const AqItem *it)
+static int aq_push(const AqItem *it)
 {
+    int ok = 0;
     EnterCriticalSection(&g_aqlock);
     int nt = (g_aqt + 1) % AQCAP;
-    if (nt != g_aqh) { g_aq[g_aqt] = *it; g_aqt = nt; }
+    if (nt != g_aqh) { g_aq[g_aqt] = *it; g_aqt = nt; ok = 1; }
     LeaveCriticalSection(&g_aqlock);
+    return ok;
+}
+
+/* teardown/create nao podem ser descartados (senao vaza section/conexao ou
+ * deixa janela fantasma, #55/#56). O main drena a cada frame -> spin curto. */
+static void aq_push_reliable(const AqItem *it)
+{
+    while (!aq_push(it))
+        Sleep(1);
 }
 
 static int aq_pop(AqItem *out)
@@ -195,8 +207,13 @@ void appsrv_drain(void)
 static DWORD WINAPI worker_main(LPVOID arg)
 {
     HANDLE pipe = (HANDLE)arg;
+    if (InterlockedIncrement(&g_nconns) > MAX_APPCONNS) {   /* quota (#128) */
+        InterlockedDecrement(&g_nconns);
+        CloseHandle(pipe);
+        return 0;
+    }
     AppConn *c = (AppConn *)calloc(1, sizeof *c);
-    if (!c) { CloseHandle(pipe); return 0; }
+    if (!c) { InterlockedDecrement(&g_nconns); CloseHandle(pipe); return 0; }
     c->pipe = pipe;
     GetNamedPipeClientProcessId(pipe, &c->pid);   /* dono da conexao (#52) */
     c->rev = CreateEventA(NULL, TRUE, FALSE, NULL);
@@ -208,6 +225,7 @@ static DWORD WINAPI worker_main(LPVOID arg)
         if (c->ready) CloseHandle(c->ready);
         CloseHandle(pipe);
         free(c);
+        InterlockedDecrement(&g_nconns);
         return 0;
     }
     InitializeCriticalSection(&c->wlock);
@@ -222,8 +240,14 @@ static DWORD WINAPI worker_main(LPVOID arg)
         ov.hEvent = c->rev;
         ResetEvent(c->rev);
         BOOL ok = ReadFile(pipe, buf, sizeof buf - 1, &n, &ov);
-        if (!ok && GetLastError() == ERROR_IO_PENDING)
-            ok = GetOverlappedResult(pipe, &ov, &n, TRUE);
+        if (!ok && GetLastError() == ERROR_IO_PENDING) {
+            /* deadline de handshake: um cliente que conecta e nao manda HELLO
+             * nao pode prender o worker pra sempre (#129) */
+            DWORD to = created ? INFINITE : 8000;
+            if (WaitForSingleObject(c->rev, to) == WAIT_OBJECT_0)
+                ok = GetOverlappedResult(pipe, &ov, &n, FALSE);
+            else { CancelIoEx(pipe, &ov); GetOverlappedResult(pipe, &ov, &n, TRUE); ok = FALSE; }
+        }
         if ((!ok && GetLastError() != ERROR_MORE_DATA) || n == 0)
             break;
         buf[n] = 0;
@@ -238,15 +262,22 @@ static DWORD WINAPI worker_main(LPVOID arg)
             ntu_trim(title);
             if (w < 1) w = 200;
             if (h < 1) h = 100;
-            if (w > 4096) w = 4096;
-            if (h > 4096) h = 4096;
+            if (w > 2048) w = 2048;   /* teto de superficie: <=16MB/app (#128) */
+            if (h > 2048) h = 2048;
 
-            char name[64];
+            char name[80];
             LONG id = InterlockedIncrement(&g_appctr);
-            snprintf(name, sizeof name, "ntunix-appsurf-%ld", (long)id);
+            unsigned salt = (unsigned)GetTickCount() ^ ((unsigned)id * 2654435761u) ^
+                            (unsigned)(UINT_PTR)c;   /* nome menos previsivel (#130) */
+            snprintf(name, sizeof name, "ntunix-appsurf-%ld-%08x", (long)id, salt);
             HANDLE sec = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL,
                                             PAGE_READWRITE, 0, (DWORD)(w * h * 4), name);
             if (!sec) { app_send(c, "APP-ERR no-surface"); break; }
+            if (GetLastError() == ERROR_ALREADY_EXISTS) {   /* pre-criado por outro (#131) */
+                CloseHandle(sec);
+                app_send(c, "APP-ERR name-collision");
+                break;
+            }
 
             /* enfileira CREATE e ESPERA o main confirmar antes de dar a surface (#46) */
             AqItem it;
@@ -255,7 +286,7 @@ static DWORD WINAPI worker_main(LPVOID arg)
             strncpy(it.title, title, sizeof it.title - 1);
             it.conn = c;
             ResetEvent(c->ready);
-            aq_push(&it);
+            aq_push_reliable(&it);   /* nao perde o CREATE (senao vaza a section, #56) */
             WaitForSingleObject(c->ready, 5000);
 
             if (InterlockedCompareExchange(&c->created, 0, 0) == 1) {
@@ -281,11 +312,12 @@ static DWORD WINAPI worker_main(LPVOID arg)
     conns_remove(c);
     CloseHandle(pipe);
     c->pipe = NULL;
+    InterlockedDecrement(&g_nconns);   /* libera a quota (#128) */
 
     AqItem it;
     ZeroMemory(&it, sizeof it);
     it.type = AQ_DESTROY; it.conn = c;
-    aq_push(&it);    /* main libera os recursos de c */
+    aq_push_reliable(&it);   /* teardown nao pode ser descartado (#55) */
     return 0;
 }
 

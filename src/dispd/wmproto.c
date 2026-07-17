@@ -477,6 +477,7 @@ static DWORD WINAPI reader_main(LPVOID arg)
         enum { ACCCAP = 65536 };
         char *acc = (char *)malloc(ACCCAP);
         if (!acc) { DisconnectNamedPipe(g_pipe); Sleep(100); continue; }
+        int got_first = 0;
         for (;;) {
             size_t acclen = 0;
             int broken = 0, complete = 0;
@@ -488,8 +489,18 @@ static DWORD WINAPI reader_main(LPVOID arg)
                 rov.hEvent = g_rev;
                 ResetEvent(g_rev);
                 BOOL ok = ReadFile(g_pipe, buf, sizeof buf, &nr, &rov);
-                if (!ok && GetLastError() == ERROR_IO_PENDING)
-                    ok = GetOverlappedResult(g_pipe, &rov, &nr, TRUE);
+                if (!ok && GetLastError() == ERROR_IO_PENDING) {
+                    /* deadline: cliente que conecta e nao fala nao pode prender
+                     * o unico slot do WM pra sempre (#84) */
+                    DWORD to = got_first ? INFINITE : 8000;
+                    if (WaitForSingleObject(g_rev, to) == WAIT_OBJECT_0)
+                        ok = GetOverlappedResult(g_pipe, &rov, &nr, FALSE);
+                    else {
+                        CancelIoEx(g_pipe, &rov);
+                        GetOverlappedResult(g_pipe, &rov, &nr, TRUE);
+                        ok = FALSE;
+                    }
+                }
                 DWORD err = ok ? 0 : GetLastError();
                 if (!ok && err != ERROR_MORE_DATA) { broken = 1; break; }
                 if (nr == 0 && ok) { broken = 1; break; }
@@ -505,6 +516,7 @@ static DWORD WINAPI reader_main(LPVOID arg)
             if (acclen > 0) {
                 acc[acclen] = 0;
                 q_push(acc, cur);
+                got_first = 1;   /* handshake iniciado: reads seguintes sem deadline */
             }
         }
         free(acc);

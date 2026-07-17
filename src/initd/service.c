@@ -246,7 +246,17 @@ static int svc_spawn(Service *s, char *err, size_t errcap)
         CloseHandle(job);
         return -1;
     }
-    AssignProcessToJobObject(job, pi.hProcess);
+    /* se a atribuicao ao job falhar, o filho escaparia do MemoryMax e do kill
+     * coletivo (KILL_ON_JOB_CLOSE) — aborta em vez de seguir sem contencao (#133) */
+    if (!AssignProcessToJobObject(job, pi.hProcess)) {
+        snprintf(err, errcap, "AssignProcessToJobObject falhou (%lu): %s",
+                 GetLastError(), cmd);
+        TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        CloseHandle(job);
+        return -1;
+    }
     ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);
 
