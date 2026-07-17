@@ -1,0 +1,28 @@
+# === Artefatos de build ===
+out/
+build/work/
+musl-nt/build/
+*.o
+*.a
+*.exe
+
+# === Imagens geradas / VM ===
+*.iso
+*.qcow2
+*.vhd
+*.vhdx
+build/vm/
+
+# === Logs de runtime / diagnóstico ===
+fork.log
+*.log
+
+# === Configs locais de ferramentas (não compartilhadas) ===
+.claude/settings.local.json
+.codex/
+
+# === Editor / SO ===
+*.swp
+*.swo
+*~
+.DS_Store

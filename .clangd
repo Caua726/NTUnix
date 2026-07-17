@@ -1,0 +1,8 @@
+# Aponta o clangd para o target/headers do mingw-w64 (build é cruzado;
+# sem isso o LSP reclama de windows.h inexistente).
+CompileFlags:
+  Compiler: x86_64-w64-mingw32-gcc
+  Add:
+    - --target=x86_64-w64-mingw32
+    - -D_WIN32_WINNT=0x0601
+    - -isystem/usr/x86_64-w64-mingw32/include

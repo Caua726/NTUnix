@@ -1,0 +1,12 @@
+# demod — servico de demonstracao (heartbeat + envio ao logd)
+[Unit]
+Description=Servico de demonstracao (heartbeat)
+Requires=logd
+
+[Service]
+ExecStart=/system/bin/demod.exe
+Restart=always
+MemoryMax=16M
+
+[Install]
+WantedBy=default.target

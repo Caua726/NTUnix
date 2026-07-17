@@ -1,0 +1,11 @@
+# logd — coletor central de logs (v0)
+[Unit]
+Description=Coletor central de logs
+
+[Service]
+ExecStart=/system/bin/logd.exe
+Restart=on-failure
+MemoryMax=32M
+
+[Install]
+WantedBy=default.target

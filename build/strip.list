@@ -1,0 +1,35 @@
+# strip.list — caminhos DENTRO da imagem (install.wim) apagados pelo
+# make-iso.sh via `wimlib-imagex update` (delete --force --recursive).
+#
+# Linhas com # e vazias sao ignoradas. --force faz caminhos inexistentes
+# (variam por versao de Windows) nao serem erro.
+#
+# v0 CONSERVADORA: so o que e seguro remover em nivel de arquivo sem
+# quebrar logon/setup. Servicos e telemetria sao desativados depois, pelo
+# SetupComplete.cmd (mais robusto que editar hive offline).
+
+# apps provisionados da Store (novos usuarios nao os recebem; registros
+# orfaos no primeiro logon sao inofensivos — nosso shell nao depende deles)
+/Program Files/WindowsApps
+
+# OneDrive (instalador por-usuario)
+/Windows/System32/OneDriveSetup.exe
+/Windows/SysWOW64/OneDriveSetup.exe
+
+# Edge integrado + updater (WebView2 fica: apps Win32 usam)
+/Program Files (x86)/Microsoft/Edge
+/Program Files (x86)/Microsoft/EdgeCore
+/Program Files (x86)/Microsoft/EdgeUpdate
+
+# wallpapers extras (mantem o padrao img0)
+/Windows/Web/Wallpaper/ThemeA
+/Windows/Web/Wallpaper/ThemeB
+/Windows/Web/Wallpaper/ThemeC
+/Windows/Web/Wallpaper/ThemeD
+/Windows/Web/touchkeyboard
+/Windows/Web/Screen
+
+# NAO remover (aprendido a duras penas em projetos tiny*):
+#  - /Windows/SystemApps  → LogonUI/CBS quebram o logon
+#  - WebView2             → varios instaladores Win32 exigem
+#  - Defender             → remocao offline corrompe servicing
