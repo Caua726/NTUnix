@@ -381,11 +381,30 @@ resolvido como no `shellexec` (direto se tem `/`,`\` ou `C:`; senão PATH-search
 propagando o exit code. Roda binário Unix-para-NTUnix e app Windows. Validado no Wine:
 `ash -c './hello.exe; echo $?'` → saída + rc=0; PATH-search idem.
 
-**Limitação remanescente:** comando externo **dentro de pipeline/subshell/background** roda
-num filho já clonado (`rootshell==0`), onde `posix_spawn` (CreateProcessW) também crasharia
-— então esses seguem o caminho fork+exec antigo (que falha no clone). Fica para depois:
-rotear também os forks de pipeline (`evalpipe`) por `posix_spawn`. Applets nesses contextos
-funcionam (rodam in-process no clone).
+## 17. RESOLUÇÃO DEFINITIVA: fork()+exec() real via fork estilo-Cygwin (2026-07-17)
+
+O clone (`RtlCloneUserProcess`) foi **substituído** por um fork estilo-Cygwin — o filho é um
+processo NORMAL completo (CSR/loader íntegros) que **pode exec**. Isso torna `fork`+`exec` de
+programas externos reais possível em **todos os contextos** (fg, pipeline, subshell,
+background), removendo de vez a limitação do clone. Rodou no VM (Windows real) **e no Wine**
+(que nem tinha fork). Detalhes de implementação no commit; resumo:
+
+- **Mecânica:** filho criado NÃO-suspenso → o loader roda (IAT resolvida) → o `crt0` detecta
+  o marcador `\x01FORK=` na cmdline, sinaliza o pai por evento e gira num loop **user-mode**;
+  o pai suspende o filho, copia a memória gravável pro filho no MESMO VA
+  (`VirtualAllocEx`+`WriteProcessMemory`; overwrite seguro de stack/`.data` com o filho
+  parado; TEB/PEB nunca) e transplanta o contexto do ponto do `fork()`
+  (`RtlCaptureContext`+`SetThreadContext`), fazendo o filho retomar retornando 0.
+- **Colisão de VA** (a parte difícil do fork do Cygwin) resolvida com: base fixa do exe
+  (`--disable-dynamicbase`); toda a memória de usuário (heap/brk/mmap/argv) numa **arena de
+  VA fixa alta** (24–32 TB), livre no filho; thread pointer da musl virou **global**
+  (single-thread), copiado junto.
+- **Armadilha que custou caro:** o spin do filho tem que ser **user-mode** (não `Sleep`) —
+  suspender uma thread parada num syscall faz o `SetThreadContext` não pegar limpo no NT real.
+
+**Consequência:** as gambiarras anteriores (applets in-process, roteamento `posix_spawn` no
+ash) viram **otimizações opcionais**, não mais necessárias — bash/make/coreutils reais são
+viáveis sem patch por-programa. É a fundação de prod.
 
 ### Deixado como está (limitação estrutural, documentado, não “bug fora do lugar”)
 Entrega de sinal (SIGPIPE/SIGINT/SIGCHLD), grupos de processo/job control, threads
