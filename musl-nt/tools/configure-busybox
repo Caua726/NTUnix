@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Apply a BusyBox Kconfig miniconfig on top of an all-disabled baseline.
+set -euo pipefail
+
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+    echo "usage: configure-busybox BUSYBOX_SOURCE [MINICONFIG]" >&2
+    exit 2
+fi
+
+source_dir=$(cd "$1" && pwd)
+root=$(cd "$(dirname "$0")/.." && pwd)
+miniconfig=${2:-"$root/test/busybox-coreutils.config"}
+
+make -s -C "$source_dir" allnoconfig >/dev/null
+
+while IFS= read -r setting; do
+    case "$setting" in
+        CONFIG_*=*)
+            symbol=${setting%%=*}
+            escaped=$(printf '%s' "$setting" | sed 's/[&|]/\\&/g')
+            if grep -q "^# $symbol is not set$" "$source_dir/.config"; then
+                sed -i "s|^# $symbol is not set$|$escaped|" "$source_dir/.config"
+            elif grep -q "^$symbol=" "$source_dir/.config"; then
+                sed -i "s|^$symbol=.*$|$escaped|" "$source_dir/.config"
+            else
+                printf '%s\n' "$setting" >> "$source_dir/.config"
+            fi
+            ;;
+    esac
+done < "$miniconfig"
+
+# Resolve dependencies and generated selections.  The allnoconfig baseline
+# already contains every symbol, so oldconfig is non-interactive here.
+make -s -C "$source_dir" oldconfig </dev/null >/dev/null
+
+# NTUnix: run EVERY applet in-process instead of fork+exec.
+#
+# The NTUnix fork() is RtlCloneUserProcess (a partial process clone).  Running
+# Unix code in-process inside the clone works (read/write/pipe/getdents all do),
+# but CreateProcessW CRASHES inside the clone -- so a standalone-shell applet
+# launched via fork + execve("/proc/self/exe") dies silently (cat, wc, sort...).
+# BusyBox already runs APPLET_NOEXEC applets (e.g. ls) in-process; this makes it
+# do the same for ALL applets, avoiding the exec path that the clone can't take.
+#
+# Idempotent: the substitution only matches the still-unpatched line.
+ash="$source_dir/shell/ash.c"
+if grep -q '^[[:space:]]*if (APPLET_IS_NOEXEC(applet_no)) {$' "$ash"; then
+    sed -i 's@^\([[:space:]]*\)if (APPLET_IS_NOEXEC(applet_no)) {$@\1if (1 || APPLET_IS_NOEXEC(applet_no)) { /* NTUnix: CreateProcessW crashes in the fork-clone; run every applet in-process */@' "$ash"
+fi

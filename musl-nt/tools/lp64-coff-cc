@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Compile one C translation unit with Linux LP64 types, then lower its LLVM IR
+# using the Windows x64 ABI and COFF object format.  This is the custom target
+# bridge that MinGW alone cannot provide (MinGW is LLP64).
+set -euo pipefail
+
+if [ "$#" -lt 2 ]; then
+    echo "usage: lp64-coff-cc SOURCE OUTPUT [extra clang flags...]" >&2
+    exit 2
+fi
+
+src=$1
+out=$2
+shift 2
+
+MUSL_SRC=${MUSL_SRC:-/tmp/musl-1.2.6}
+root=$(cd "$(dirname "$0")/.." && pwd)
+resource=$(clang -print-resource-dir)
+mkdir -p "$(dirname "$out")" "$root/build/ir"
+name=$(printf '%s' "$out" | tr '/.' '__')
+raw_bc="$root/build/ir/$name.raw.bc"
+bc="$root/build/ir/$name.bc"
+rewrite=${SYSV_REWRITE:-$root/build/tools/sysv-coff-rewrite}
+
+if [ ! -x "$rewrite" ]; then
+    echo "lp64-coff-cc: missing $rewrite; run make first" >&2
+    exit 2
+fi
+
+clang -target x86_64-unknown-linux-musl -std=gnu11 -D_XOPEN_SOURCE=700 \
+    -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-PIC \
+    -ffunction-sections -fdata-sections \
+    -Wno-shift-op-parentheses -Wno-deprecated-non-prototype \
+    -fno-asynchronous-unwind-tables -nostdinc \
+    -isystem "$resource/include" \
+    -I"$root/build/include" \
+    -I"$MUSL_SRC/src/include" -I"$MUSL_SRC/src/internal" \
+    -I"$MUSL_SRC/include" \
+    -I"$root/arch/x86_64" -I"$MUSL_SRC/arch/x86_64" \
+    -I"$MUSL_SRC/arch/generic" \
+    "$@" -emit-llvm -c "$src" -o "$raw_bc"
+
+"$rewrite" "$raw_bc" "$bc"
+llc -mtriple=x86_64-pc-windows-gnu -filetype=obj "$bc" -o "$out"

@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Small compiler driver for the hybrid LP64/Win64 target.
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")" && pwd)
+MUSL_SRC=${MUSL_SRC:-/tmp/musl-1.2.6}
+
+case " ${*:-} " in
+    *" --version "*) echo "ntposix-gcc (musl-nt LP64/COFF) 0.1"; exit 0 ;;
+esac
+
+compile=0
+preprocess=0
+output=
+source=
+assembly=0
+extra=()
+link_args=()
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -c) compile=1 ;;
+        -E) preprocess=1; extra+=("$1") ;;
+        -o)
+            shift
+            [ "$#" -gt 0 ] || { echo "ntposix-gcc: -o sem argumento" >&2; exit 2; }
+            output=$1 ;;
+        *.c) source=$1; link_args+=("$1") ;;
+        *.S|*.s) source=$1; assembly=1; link_args+=("$1") ;;
+        -static|-nostdlib|-nodefaultlibs|-lc|-lm|-lpthread|-lrt|-ldl|-lcrypt|-lutil)
+            ;;
+        -Wl,--warn-common|-Wl,--sort-common|-Wl,--sort-section,alignment)
+            ;;
+        *) extra+=("$1"); link_args+=("$1") ;;
+    esac
+    shift
+done
+
+if [ "$preprocess" = 1 ]; then
+    if [ "$assembly" = 1 ]; then
+        exec clang -target x86_64-pc-windows-gnu \
+            -I"$root/build/include" -I"$MUSL_SRC/include" \
+            "${extra[@]}" "$source"
+    fi
+    resource=$(clang -print-resource-dir)
+    exec clang -target x86_64-unknown-linux-musl -D_XOPEN_SOURCE=700 \
+        -nostdinc -isystem "$resource/include" \
+        -I"$root/build/include" -I"$MUSL_SRC/src/include" \
+        -I"$MUSL_SRC/src/internal" -I"$MUSL_SRC/include" \
+        -I"$root/arch/x86_64" -I"$MUSL_SRC/arch/x86_64" \
+        -I"$MUSL_SRC/arch/generic" "${extra[@]}" "$source"
+fi
+
+if [ "$compile" = 1 ]; then
+    [ -n "$source" ] || { echo "ntposix-gcc: fonte ausente" >&2; exit 2; }
+    [ -n "$output" ] || output="${source%.*}.o"
+    filtered=()
+    for arg in "${extra[@]}"; do
+        case "$arg" in -Wl,*|-fuse-ld=*|-mwindows) ;; *) filtered+=("$arg") ;; esac
+    done
+    if [ "$assembly" = 1 ]; then
+        exec clang -target x86_64-pc-windows-gnu -ffreestanding \
+            -I"$root/build/include" -I"$MUSL_SRC/include" \
+            "${filtered[@]}" -c "$source" -o "$output"
+    fi
+    MUSL_SRC=$MUSL_SRC exec "$root/tools/lp64-coff-cc" \
+        "$source" "$output" "${filtered[@]}"
+fi
+
+if [ -n "$source" ] && [ "$assembly" = 0 ]; then
+    tmp=$(mktemp --suffix=.o)
+    trap 'rm -f "$tmp"' EXIT
+    MUSL_SRC=$MUSL_SRC "$root/tools/lp64-coff-cc" "$source" "$tmp"
+    replaced=()
+    for arg in "${link_args[@]}"; do
+        if [ "$arg" = "$source" ]; then replaced+=("$tmp"); else replaced+=("$arg"); fi
+    done
+    link_args=("${replaced[@]}")
+fi
+
+[ -n "$output" ] || output=a.exe
+x86_64-w64-mingw32-gcc -fuse-ld=lld -nostdlib -nodefaultlibs \
+    -Wl,--entry=mainCRTStartup -Wl,--subsystem,console \
+    -Wl,--gc-sections -Wl,-u,__errno_location \
+    -o "$output" "$root/build/crt0.o" "${link_args[@]}" \
+    -Wl,--whole-archive "$root/build/libc-nt.a" -Wl,--no-whole-archive \
+    -lkernel32 -lntdll -lsynchronization -ladvapi32 -lgcc
+
+# MinGW's driver appends .exe when the requested name has no suffix.  Unix
+# build systems such as BusyBox expect the output path passed to -o verbatim.
+# Always replace an older exact-name output: otherwise a successful relink
+# leaves the stale Unix-named executable in place.
+if [ "$output.exe" != "$output" ] && [ -e "$output.exe" ]; then
+    mv -f "$output.exe" "$output"
+fi
