@@ -38,13 +38,11 @@ Window *spawn_terminal(const char *cmdline)
     if (!cmdline) {
         char shell[32] = "";
         GetEnvironmentVariableA("DISPD_SHELL", shell, sizeof shell);
-        if (!_stricmp(shell, "ash")) {
+        if (!_stricmp(shell, "cmd")) {
+            snprintf(def, sizeof def, "cmd.exe");   /* diagnostico: DISPD_SHELL=cmd */
+        } else {
             ntu_path("/system/bin/busybox.exe", bb, sizeof bb);
             snprintf(def, sizeof def, "\"%s\" ash -i", bb);
-        } else {
-            /* DIAGNOSTICO: cmd.exe isola ConPTY/render/input do busybox-ash.
-             * (DISPD_SHELL=ash volta pro ash; reverter default quando resolver) */
-            snprintf(def, sizeof def, "cmd.exe");
         }
         cmdline = def;
     }
