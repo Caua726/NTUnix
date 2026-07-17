@@ -227,8 +227,10 @@ static int enqueue(DWORD vk, DWORD scan, int down)
     } else {
         g_down[idx] = 0;
         int app = g_srv.focused && g_srv.focused->kind == WK_APP;
-        if (app && !mod)
-            kq_push(mods, vk, scan, 0);         /* app recebe keyup (#10) */
+        if (app)
+            kq_push(mods, vk, scan, 0);         /* app recebe keyup, INCLUSIVE de
+                                                 * modificadores (simetrico ao down,
+                                                 * senao a tecla fica "presa" #10) */
         int suppress = g_suppressed[idx];        /* suprime o par do keydown (#11) */
         g_suppressed[idx] = 0;
         return suppress;

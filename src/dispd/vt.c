@@ -103,6 +103,7 @@ int vt_init(Terminal *t, int cols, int rows)
     t->mode_autowrap = 1;
     t->mode_origin = 0;
     t->vt_state = VT_GROUND;
+    t->last_cp = ' ';
     grid_reset_defaults(t);
     for (int x = 8; x < cols; x += 8)
         t->tabs[x] = 1;
@@ -381,8 +382,6 @@ static void set_mode(Terminal *t, int set)
 static int cur_top(Terminal *t) { return t->mode_origin ? t->scroll_top : 0; }
 static int cur_bot(Terminal *t) { return t->mode_origin ? t->scroll_bot : t->rows - 1; }
 
-static unsigned g_last_cp;   /* para REP (CSI b) */
-
 static void csi_dispatch(Terminal *t, unsigned char final)
 {
     int a0 = t->nparams > 0 ? t->params[0] : 0;
@@ -537,14 +536,14 @@ static void feed_byte(Terminal *t, unsigned char u)
         /* imprimivel: decodifica UTF-8 */
         if (u < 0x80) {
             t->utf8_left = 0;
-            put_cp(t, u); g_last_cp = u;
+            put_cp(t, u); t->last_cp = u;
         } else if ((u & 0xe0) == 0xc0) { t->utf8_cp = u & 0x1f; t->utf8_left = 1; }
         else if ((u & 0xf0) == 0xe0)   { t->utf8_cp = u & 0x0f; t->utf8_left = 2; }
         else if ((u & 0xf8) == 0xf0)   { t->utf8_cp = u & 0x07; t->utf8_left = 3; }
         else if ((u & 0xc0) == 0x80) {   /* continuacao */
             if (t->utf8_left > 0) {
                 t->utf8_cp = (t->utf8_cp << 6) | (u & 0x3f);
-                if (--t->utf8_left == 0) { put_cp(t, t->utf8_cp); g_last_cp = t->utf8_cp; }
+                if (--t->utf8_left == 0) { put_cp(t, t->utf8_cp); t->last_cp = t->utf8_cp; }
             }
         } else { t->utf8_left = 0; put_cp(t, '?'); }
         break;
@@ -601,7 +600,7 @@ static void feed_byte(Terminal *t, unsigned char u)
         } else if (u >= 0x40 && u <= 0x7e) {
             if (u == 'b') {   /* REP */
                 int rep = t->nparams > 0 && t->params[0] ? t->params[0] : 1;
-                if (!t->param_ovf) while (rep-- > 0) put_cp(t, g_last_cp);
+                if (!t->param_ovf) while (rep-- > 0) put_cp(t, t->last_cp);
             } else if (!t->param_ovf) {
                 csi_dispatch(t, u);
             }

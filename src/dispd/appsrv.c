@@ -111,9 +111,15 @@ static AppConn *conns_find(unsigned wid)
 /* escrita ao app (overlapped, com timeout) — worker (setup) e main (input) */
 static void app_send(AppConn *c, const char *line)
 {
-    if (!c || InterlockedCompareExchange(&c->dead, 0, 0))
+    if (!c)
         return;
     EnterCriticalSection(&c->wlock);
+    /* re-checa dead/pipe SOB o lock: o teardown zera c->pipe sob o mesmo lock,
+     * entao nunca escrevemos num handle ja fechado/reciclado */
+    if (InterlockedCompareExchange(&c->dead, 0, 0) || !c->pipe) {
+        LeaveCriticalSection(&c->wlock);
+        return;
+    }
     OVERLAPPED ov;
     ZeroMemory(&ov, sizeof ov);
     ov.hEvent = c->wev;
@@ -159,7 +165,8 @@ void appsrv_close_wid(unsigned id)
         HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, c->pid);
         if (h) { TerminateProcess(h, 0); CloseHandle(h); }
     }
-    CancelIoEx(c->pipe, NULL);           /* desbloqueia a leitora -> worker sai */
+    if (c->pipe)
+        CancelIoEx(c->pipe, NULL);       /* desbloqueia a leitora -> worker sai */
 }
 
 /* ---- main thread: aplica os pedidos ---- */
@@ -308,10 +315,13 @@ static DWORD WINAPI worker_main(LPVOID arg)
         }
     }
 
+    /* zera c->pipe SOB o wlock antes de fechar, pra nao correr com app_send */
+    EnterCriticalSection(&c->wlock);
     InterlockedExchange(&c->dead, 1);
+    c->pipe = NULL;
+    LeaveCriticalSection(&c->wlock);
     conns_remove(c);
     CloseHandle(pipe);
-    c->pipe = NULL;
     InterlockedDecrement(&g_nconns);   /* libera a quota (#128) */
 
     AqItem it;

@@ -92,6 +92,7 @@ typedef struct Terminal {
     unsigned short sv_attr;
     unsigned utf8_cp;         /* acumulador de decodificacao UTF-8 */
     int    utf8_left;         /* bytes de continuacao restantes */
+    unsigned last_cp;         /* ultimo codepoint impresso (para REP/CSI b) */
     char   osc[VT_OSCCAP];
     int    osc_len;
     char  *tabs;              /* cols: 1 onde ha tab stop */
