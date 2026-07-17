@@ -362,8 +362,18 @@ void compose_and_present(void)
             SetBkMode(g_srv.cdc, TRANSPARENT);
             SetTextColor(g_srv.cdc, w->focused ? RGB(12, 14, 20)
                                                : RGB(180, 180, 195));
+            /* diagnostico temporario no titulo: backend, bytes recebidos, vivo */
+            char lbl[320];
+            const char *base = w->title[0] ? w->title
+                             : (w->kind == WK_TERM ? "terminal" : "app");
+            if (w->kind == WK_TERM && w->term)
+                snprintf(lbl, sizeof lbl, "%s  [%s rx:%ld a:%d]", base,
+                         w->term->be ? w->term->be->name : "?",
+                         w->term->rx, w->term->alive);
+            else
+                snprintf(lbl, sizeof lbl, "%s", base);
             RECT tr = { ix + 6, iy, ix + iw - 6, iy + g_srv.title_h };
-            DrawTextA(g_srv.cdc, w->title[0] ? w->title : "terminal", -1, &tr,
+            DrawTextA(g_srv.cdc, lbl, -1, &tr,
                       DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         }
 

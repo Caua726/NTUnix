@@ -147,6 +147,12 @@ static int scrape_start(Terminal *t, const char *cmdline, int cols, int rows)
     CloseHandle(pi.hThread);
     s->hproc = pi.hProcess;
     s->reader = CreateThread(NULL, 0, reader_main, t, 0, NULL);
+    if (!s->reader) {
+        TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hProcess);
+        s->hproc = NULL;
+        goto fail;
+    }
     return 0;
 
 fail:

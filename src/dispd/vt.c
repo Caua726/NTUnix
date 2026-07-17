@@ -269,6 +269,7 @@ void vt_feed(Terminal *t, const char *bytes, int n)
     for (int i = 0; i < n; i++)
         feed_byte(t, (unsigned char)bytes[i]);
     t->dirty = 1;
+    t->rx += n;
     LeaveCriticalSection(&t->lock);
 }
 

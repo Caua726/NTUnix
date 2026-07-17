@@ -133,6 +133,10 @@ static int conpty_start(Terminal *t, const char *cmdline, int cols, int rows)
     CloseHandle(pi.hThread);
     c->hproc = pi.hProcess;
     c->reader = CreateThread(NULL, 0, reader_main, t, 0, NULL);
+    if (!c->reader) {              /* sem leitora o terminal fica morto */
+        TerminateProcess(pi.hProcess, 1);
+        goto fail;
+    }
     return 0;
 
 fail:
@@ -141,6 +145,7 @@ fail:
     if (c->hpc)   p_Close(c->hpc);
     if (c->in_w)  CloseHandle(c->in_w);
     if (c->out_r) CloseHandle(c->out_r);
+    if (c->hproc) CloseHandle(c->hproc);
     free(c);
     t->impl = NULL;
     return -1;

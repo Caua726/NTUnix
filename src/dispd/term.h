@@ -35,8 +35,9 @@ typedef struct Terminal {
     Cell  *grid;              /* cols*rows, [row*cols + col] */
     int    cur_x, cur_y;
     int    cur_vis;
-    int    dirty;             /* conteudo mudou desde o ultimo render */
-    int    alive;             /* filho ainda vivo */
+    volatile int dirty;       /* conteudo mudou desde o ultimo render */
+    volatile int alive;       /* filho ainda vivo */
+    volatile long rx;         /* diagnostico: bytes vindos do filho */
 
     struct Window *win;       /* dono (usado pelo compositor, nao pelo vt) */
     CRITICAL_SECTION lock;    /* grade tocada pela thread leitora */

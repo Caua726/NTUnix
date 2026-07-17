@@ -28,10 +28,12 @@
 /* eventos dispd -> ntwm */
 #define EVT_WELCOME    "WELCOME"      /* WELCOME dispd <ver> <root>            */
 #define EVT_OUTPUT     "OUTPUT"       /* OUTPUT <oid> <x> <y> <w> <h>          */
-#define EVT_WINDOW     "WINDOW"       /* WINDOW <wid> <kind> <pid> <title...>  (snapshot) */
-#define EVT_CREATED    "WINDOW-CREATED"
+#define EVT_CURWS      "CURWS"        /* CURWS <n>  (workspace atual, no snapshot) */
+#define EVT_WINDOW     "WINDOW"       /* WINDOW <wid> <kind> <pid> <ws> <title...>  (snapshot) */
+#define EVT_CREATED    "WINDOW-CREATED" /* <wid> <kind> <pid> <title...>  (novo no ws atual) */
 #define EVT_DESTROYED  "WINDOW-DESTROYED" /* <wid> */
 #define EVT_TITLE      "WINDOW-TITLE"  /* <wid> <title...> */
+#define EVT_FOCUSED    "FOCUSED"      /* <wid>  (foco mudou no dispd, ex.: mouse) */
 #define EVT_KEY        "KEY"          /* KEY <mods> <vk>  (so combos com grab) */
 #define EVT_SYNC       "SYNC"
 #define EVT_ERR        "ERR"
