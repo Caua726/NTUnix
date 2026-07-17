@@ -33,17 +33,15 @@ done < "$miniconfig"
 # already contains every symbol, so oldconfig is non-interactive here.
 make -s -C "$source_dir" oldconfig </dev/null >/dev/null
 
-# NTUnix: run EVERY applet in-process instead of fork+exec.
+# NTUnix: patches no ash para o modelo de processo do NT (ver patches/).
 #
-# The NTUnix fork() is RtlCloneUserProcess (a partial process clone).  Running
-# Unix code in-process inside the clone works (read/write/pipe/getdents all do),
-# but CreateProcessW CRASHES inside the clone -- so a standalone-shell applet
-# launched via fork + execve("/proc/self/exe") dies silently (cat, wc, sort...).
-# BusyBox already runs APPLET_NOEXEC applets (e.g. ls) in-process; this makes it
-# do the same for ALL applets, avoiding the exec path that the clone can't take.
+# O fork() da NTUnix e' RtlCloneUserProcess (clone parcial) e o CreateProcessW
+# CRASHA dentro do clone. O patch faz duas coisas:
+#  (1) roda TODO applet in-process (nao so os NOEXEC) -- o exec no clone morre;
+#  (2) roda programa externo real via posix_spawn (sem fork), no shell principal,
+#      para rodar binarios Unix-para-NTUnix e apps Windows.
 #
-# Idempotent: the substitution only matches the still-unpatched line.
-ash="$source_dir/shell/ash.c"
-if grep -q '^[[:space:]]*if (APPLET_IS_NOEXEC(applet_no)) {$' "$ash"; then
-    sed -i 's@^\([[:space:]]*\)if (APPLET_IS_NOEXEC(applet_no)) {$@\1if (1 || APPLET_IS_NOEXEC(applet_no)) { /* NTUnix: CreateProcessW crashes in the fork-clone; run every applet in-process */@' "$ash"
+# Aplica de forma idempotente (so se ainda nao aplicado).
+if ! grep -q 'spawn_external' "$source_dir/shell/ash.c"; then
+    patch -p1 -d "$source_dir" < "$root/patches/busybox-ntunix-ash.patch"
 fi

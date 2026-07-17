@@ -1,0 +1,99 @@
+diff --git a/shell/ash.c b/shell/ash.c
+index bbd7307..13fedb0 100644
+--- a/shell/ash.c
++++ b/shell/ash.c
+@@ -200,6 +200,7 @@
+ #include <fnmatch.h>
+ #include <sys/times.h>
+ #include <sys/utsname.h> /* for setting $HOSTNAME */
++#include <spawn.h> /* NTUnix: posix_spawn para exec externo sem fork */
+ #include "busybox.h" /* for applet_names */
+ #if ENABLE_FEATURE_SH_EMBEDDED_SCRIPTS
+ # include "embedded_scripts.h"
+@@ -8268,7 +8269,7 @@ tryexec(IF_FEATURE_SH_STANDALONE(int applet_no,) const char *cmd, char **argv, c
+ {
+ #if ENABLE_FEATURE_SH_STANDALONE
+ 	if (applet_no >= 0) {
+-		if (APPLET_IS_NOEXEC(applet_no)) {
++		if (1 || APPLET_IS_NOEXEC(applet_no)) { /* NTUnix: CreateProcessW crashes in the fork-clone; run every applet in-process */
+ 			clearenv();
+ 			while (*envp)
+ 				putenv(*envp++);
+@@ -8380,6 +8381,55 @@ static void shellexec(char *prog, char **argv, const char *path, int idx)
+ 	/* NOTREACHED */
+ }
+ 
++#if ENABLE_FEATURE_SH_STANDALONE
++/* NTUnix: roda um programa externo REAL via posix_spawn (sem fork). O fork da
++ * NTUnix e' RtlCloneUserProcess e o CreateProcessW crasha dentro do clone, entao
++ * fork+exec de binario externo nao funciona; posix_spawn faz o CreateProcessW no
++ * processo pai. As redirecoes ja estao aplicadas nos fds correntes (redirectsafe,
++ * herdadas pelo filho) e listvars da o env com as variaveis temporarias. Roda
++ * tanto app Unix-buildado-para-NTUnix quanto app Windows (ambos sao PE). Espelha
++ * a resolucao de path do shellexec. Devolve o exit code (0-255), ou -1 se o
++ * programa nao foi encontrado (o chamador cai no caminho de erro normal). */
++static int spawn_external(char **argv, const char *path, int idx)
++{
++	char **envp = listvars(VEXPORT, VUNSET, /*strlist:*/ NULL, /*end:*/ NULL);
++	char *prog = argv[0];
++	pid_t pid = -1;
++	int rc = ENOENT;
++	int wstatus = 0;
++	int direct = (strchr(prog, '/') != NULL)
++	          || (strchr(prog, '\\') != NULL)
++	          || (prog[0] && prog[1] == ':');   /* caminho Windows C:\... */
++
++	if (direct) {
++		rc = posix_spawn(&pid, prog, NULL, NULL, argv, envp);
++	} else {
++		struct stackmark smark;
++		setstackmark(&smark);
++		while (padvance(&path, prog) >= 0) {
++			char *cmdname = stackblock();
++			if (--idx < 0 && pathopt == NULL) {
++				rc = posix_spawn(&pid, cmdname, NULL, NULL, argv, envp);
++				if (rc == 0)
++					break;
++				if (rc != ENOENT && rc != ENOTDIR)
++					break;
++			}
++		}
++		popstackmark(&smark);
++	}
++
++	if (rc != 0)
++		return -1;   /* nao encontrado / erro -> caminho de erro normal */
++
++	while (waitpid(pid, &wstatus, 0) < 0 && errno == EINTR)
++		continue;
++	if (WIFSIGNALED(wstatus))
++		return 128 + WTERMSIG(wstatus);
++	return WEXITSTATUS(wstatus);
++}
++#endif
++
+ static void
+ printentry(struct tblentry *cmdp)
+ {
+@@ -10594,6 +10644,21 @@ evalcommand(union node *cmd, int flags)
+ 			INT_ON;
+ 			break;
+ 		}
++#endif
++#if ENABLE_FEATURE_SH_STANDALONE
++		/* NTUnix: no shell principal (nao-clonado), um programa externo real
++		 * (nao-applet) roda via posix_spawn (sem fork; CreateProcessW crasha
++		 * dentro do clone do RtlCloneUserProcess). Applets caem no caminho
++		 * normal abaixo (fork + in-process, que funciona no clone); contextos
++		 * ja forkeados (subshell/pipeline/&, rootshell==0) idem. */
++		if (rootshell && find_applet_by_name(argv[0]) < 0) {
++			int es = spawn_external(argv, path, cmdentry.u.index);
++			if (es >= 0) {
++				exitstatus = es;
++				break;
++			}
++			/* es < 0: nao encontrado -> deixa o shellexec normal reportar */
++		}
+ #endif
+ 		/* Can we avoid forking? For example, very last command
+ 		 * in a script or a subshell does not need forking,
