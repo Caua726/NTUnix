@@ -42,6 +42,10 @@ typedef struct {
     HANDLE hproc;
     HANDLE reader;
     volatile LONG stop;
+    CRITICAL_SECTION in_lock;   /* serializa escritas no in_w: o main manda teclas
+                                 * e a leitora manda respostas a queries (DSR/DA);
+                                 * escritas concorrentes num pipe byte intercalam */
+    int    in_lock_init;
 } ConPty;
 
 static DWORD WINAPI reader_main(LPVOID arg)
@@ -96,6 +100,8 @@ static int conpty_start(Terminal *t, const char *cmdline, int cols, int rows)
         return -1;
     t->impl = c;
     t->backend_is_pty = 1;   /* aceita respostas a DSR/DA (write-back destrava ash) */
+    InitializeCriticalSection(&c->in_lock);
+    c->in_lock_init = 1;
 
     HANDLE in_r = INVALID_HANDLE_VALUE, out_w = INVALID_HANDLE_VALUE;
     if (!CreatePipe(&in_r, &c->in_w, NULL, 0) ||
@@ -148,6 +154,7 @@ fail:
     if (c->in_w)  CloseHandle(c->in_w);
     if (c->out_r) CloseHandle(c->out_r);
     if (c->hproc) CloseHandle(c->hproc);
+    if (c->in_lock_init) DeleteCriticalSection(&c->in_lock);
     free(c);
     t->impl = NULL;
     return -1;
@@ -156,10 +163,12 @@ fail:
 static void conpty_input(Terminal *t, const char *bytes, int n)
 {
     ConPty *c = (ConPty *)t->impl;
-    if (!c)
+    if (!c || !c->in_w)
         return;
     DWORD w;
+    EnterCriticalSection(&c->in_lock);   /* main (teclas) x leitora (respostas) */
     WriteFile(c->in_w, bytes, (DWORD)n, &w, NULL);
+    LeaveCriticalSection(&c->in_lock);
 }
 
 static void conpty_resize(Terminal *t, int cols, int rows)
@@ -203,6 +212,7 @@ static void conpty_close(Terminal *t)
         TerminateProcess(c->hproc, 0);   /* #93: garante o fim do filho */
         CloseHandle(c->hproc);
     }
+    if (c->in_lock_init) DeleteCriticalSection(&c->in_lock);   /* apos o join */
     free(c);
     t->impl = NULL;
 }
