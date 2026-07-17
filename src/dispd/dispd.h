@@ -87,8 +87,9 @@ void     win_focus(Window *w);
 void     compose_and_present(void);
 Window  *win_at_point(int x, int y);   /* topo visivel no ws atual */
 
-/* input.c — teclado via hook LL global (independe de foco) */
+/* input.c — teclado: hook LL global + WM_KEYDOWN (foco forcado), redundantes */
 void     input_install_hook(void);
+int      input_key(unsigned vk, unsigned scan);   /* retorna 1 se tratou */
 
 /* wmproto.c */
 void     wmproto_start(void);                 /* sobe o servidor de pipe (thread) */

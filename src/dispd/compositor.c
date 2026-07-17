@@ -296,10 +296,13 @@ static void draw_bar(void)
                  (int)strlen(g_srv.focused->title));
     }
 
-    /* diagnostico + relogio (direita): "k:<teclas> YYYY-MM-DD HH:MM:SS" */
-    char tm[32], ts[64];
+    /* diagnostico + relogio (direita): "k:<teclas> <backend> <data hora>" */
+    const char *be = "-";
+    if (g_srv.focused && g_srv.focused->term && g_srv.focused->term->be)
+        be = g_srv.focused->term->be->name;
+    char tm[32], ts[80];
     ntu_now(tm, sizeof tm);
-    snprintf(ts, sizeof ts, "k:%ld  %s", g_srv.keys_seen, tm);
+    snprintf(ts, sizeof ts, "k:%ld %s  %s", g_srv.keys_seen, be, tm);
     SIZE cs;
     GetTextExtentPoint32A(dc, ts, (int)strlen(ts), &cs);
     SetTextColor(dc, RGB(150, 150, 170));

@@ -154,9 +154,14 @@ static void frame_tick(void)
 static LRESULT CALLBACK root_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
 {
     switch (m) {
-    /* teclado nao vem por aqui: e' capturado pelo hook LL (input.c),
-     * independente de foco (a janela do dispd nao ganha foco por ser
-     * lancada pelo initd). Aqui so tratamos mouse e fechamento. */
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+        /* fallback do teclado: se o hook LL nao disparar. O hook suprime o
+         * que trata, entao nao ha processamento duplo. scan = lp[16..23]. */
+        input_key((unsigned)wp, (unsigned)((lp >> 16) & 0xff));
+        return 0;
+    case WM_SYSCHAR:
+        return 0;               /* engole o beep do Alt+tecla */
     case WM_LBUTTONDOWN: {
         Window *w = win_at_point(LOWORD(lp), HIWORD(lp));
         if (w)
@@ -177,6 +182,23 @@ static LRESULT CALLBACK root_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         return 0;
     }
     return DefWindowProcA(h, m, wp, lp);
+}
+
+/* forca a janela pra foreground+foco mesmo lancada por processo nao-interativo
+ * (initd), via AttachThreadInput ao thread do foreground atual. */
+static void force_foreground(HWND w)
+{
+    HWND fg = GetForegroundWindow();
+    DWORD fgt = fg ? GetWindowThreadProcessId(fg, NULL) : 0;
+    DWORD me = GetCurrentThreadId();
+    if (fgt && fgt != me)
+        AttachThreadInput(me, fgt, TRUE);
+    BringWindowToTop(w);
+    SetForegroundWindow(w);
+    SetFocus(w);
+    SetActiveWindow(w);
+    if (fgt && fgt != me)
+        AttachThreadInput(me, fgt, FALSE);
 }
 
 static HWND make_root(void)
@@ -215,7 +237,7 @@ int main(void)
         return 1;
     }
     ShowWindow(g_srv.root, SW_SHOW);
-    SetForegroundWindow(g_srv.root);
+    force_foreground(g_srv.root);
 
     compositor_init();
     g_srv.bar_h = g_srv.cellh + 6;

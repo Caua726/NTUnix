@@ -136,13 +136,21 @@ static int handle_key(DWORD vk, DWORD scan)
     return 0;
 }
 
+/* entrada unica: usada pelo hook LL e pelo WM_KEYDOWN da janela. Retorna 1 se
+ * tratou (o hook usa isso pra suprimir; assim nunca ha processamento duplo:
+ * se o hook trata+suprime, o WM_KEYDOWN nem chega). */
+int input_key(unsigned vk, unsigned scan)
+{
+    g_srv.keys_seen++;   /* prova (visivel na barra) que a tecla chegou */
+    g_srv.dirty = 1;     /* atualiza a barra na hora */
+    return handle_key(vk, scan);
+}
+
 static LRESULT CALLBACK ll_proc(int code, WPARAM wp, LPARAM lp)
 {
     if (code == HC_ACTION && (wp == WM_KEYDOWN || wp == WM_SYSKEYDOWN)) {
         KBDLLHOOKSTRUCT *k = (KBDLLHOOKSTRUCT *)lp;
-        g_srv.keys_seen++;   /* prova (visivel na barra) que o hook disparou */
-        g_srv.dirty = 1;     /* atualiza a barra na hora */
-        if (handle_key(k->vkCode, k->scanCode))
+        if (input_key((unsigned)k->vkCode, (unsigned)k->scanCode))
             return 1;   /* suprime a tecla tratada */
     }
     return CallNextHookEx(g_hook, code, wp, lp);
