@@ -180,7 +180,7 @@ static void apply(char *line)
             w->ws = atoi(av[6]);
             w->z = atoi(av[7]);
             int bp = w->border_px * 2;
-            win_set_client_size(w, ww - bp, hh - bp);
+            win_set_client_size(w, ww - bp, hh - bp - g_srv.title_h);
         }
     } else if (!strcmp(v, CMD_FOCUS) && n >= 2) {
         win_focus(win_find((unsigned)strtoul(av[1], NULL, 10)));

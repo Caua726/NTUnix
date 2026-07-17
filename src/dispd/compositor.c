@@ -177,6 +177,8 @@ Window *win_find(unsigned id)
 
 void win_set_client_size(Window *w, int cw, int ch)
 {
+    if (w->kind == WK_APP)
+        return;            /* app: DIB e' fixo (sobre a section compartilhada) */
     if (cw < 1) cw = 1;
     if (ch < 1) ch = 1;
     if (cw == w->cw && ch == w->ch)
@@ -339,15 +341,35 @@ void compose_and_present(void)
         if (w->kind == WK_TERM && w->term && w->term->dirty)
             vt_render(w->term, w->memdc, g_srv.font, g_srv.cellw, g_srv.cellh);
 
-        /* borda: preenche o rect inteiro com a cor da borda, conteudo por cima */
+        /* borda: preenche o rect com a cor da borda (foco = destaque) */
         COLORREF bc = w->focused ? BORDER_FOCUS : w->border_rgb;
         HBRUSH bb = CreateSolidBrush(bc);
         FillRect(g_srv.cdc, &w->rect, bb);
         DeleteObject(bb);
 
-        int cx = w->rect.left + w->border_px;
-        int cy = w->rect.top + w->border_px;
-        BitBlt(g_srv.cdc, cx, cy, w->cw, w->ch, w->memdc, 0, 0, SRCCOPY);
+        int ix = w->rect.left + w->border_px;
+        int iy = w->rect.top + w->border_px;
+        int iw = (w->rect.right - w->rect.left) - 2 * w->border_px;
+
+        /* barra de titulo por janela (estilo i3): faixa colorida + titulo */
+        if (g_srv.title_h > 0 && iw > 0) {
+            RECT tb = { ix, iy, ix + iw, iy + g_srv.title_h };
+            COLORREF tc = w->focused ? BORDER_FOCUS : RGB(44, 44, 52);
+            HBRUSH tbb = CreateSolidBrush(tc);
+            FillRect(g_srv.cdc, &tb, tbb);
+            DeleteObject(tbb);
+            SelectObject(g_srv.cdc, g_srv.font);
+            SetBkMode(g_srv.cdc, TRANSPARENT);
+            SetTextColor(g_srv.cdc, w->focused ? RGB(12, 14, 20)
+                                               : RGB(180, 180, 195));
+            RECT tr = { ix + 6, iy, ix + iw - 6, iy + g_srv.title_h };
+            DrawTextA(g_srv.cdc, w->title[0] ? w->title : "terminal", -1, &tr,
+                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        }
+
+        /* conteudo (terminal/app) abaixo da barra de titulo */
+        BitBlt(g_srv.cdc, ix, iy + g_srv.title_h, w->cw, w->ch,
+               w->memdc, 0, 0, SRCCOPY);
     }
 
     draw_bar();

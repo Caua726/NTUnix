@@ -63,6 +63,7 @@ typedef struct Server {
     int       cellw, cellh;
 
     int       bar_h;       /* altura da barra de status no topo */
+    int       title_h;     /* altura da barra de titulo por janela (0=off) */
     int       dirty;       /* precisa recompor+apresentar neste tick */
     int       ffm;         /* focus-follows-mouse (DISPD_FFM=1) */
     long      keys_seen;   /* diagnostico: teclas capturadas pelo hook */

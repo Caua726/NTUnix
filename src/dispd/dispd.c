@@ -59,7 +59,7 @@ Window *spawn_terminal(const char *cmdline)
     return w;
 }
 
-/* layout embutido (so quando nao ha ntwm): pilha vertical simples */
+/* layout embutido (so quando nao ha ntwm): pilha vertical com margem. */
 static void builtin_layout(void)
 {
     Window *v[64];
@@ -69,18 +69,24 @@ static void builtin_layout(void)
             v[n++] = w;
     if (n == 0)
         return;
-    int y = g_srv.bar_h;          /* abaixo da barra de status */
+    int g = 8;                                  /* margem */
+    int x0 = g, y0 = g_srv.bar_h + g;
+    int W = g_srv.scr_w - 2 * g;
+    int H = g_srv.scr_h - g_srv.bar_h - 2 * g;
+    if (W < 1) W = 1;
+    if (H < 1) H = 1;
+    int each = (H - (n - 1) * g) / n;
+    if (each < 1) each = 1;
     for (int i = 0; i < n; i++) {
         Window *w = v[i];
-        int h = (g_srv.scr_h - y) / (n - i);
-        w->rect.left = 0;
-        w->rect.top = y;
-        w->rect.right = g_srv.scr_w;
-        w->rect.bottom = y + h;
+        int top = y0 + i * (each + g);
+        w->rect.left = x0;
+        w->rect.top = top;
+        w->rect.right = x0 + W;
+        w->rect.bottom = top + each;
         w->z = i;
         int bp = w->border_px * 2;
-        win_set_client_size(w, g_srv.scr_w - bp, h - bp);
-        y += h;
+        win_set_client_size(w, W - bp, each - bp - g_srv.title_h);
     }
 }
 
@@ -241,6 +247,11 @@ int main(void)
 
     compositor_init();
     g_srv.bar_h = g_srv.cellh + 6;
+    g_srv.title_h = g_srv.cellh + 4;   /* barra de titulo por janela */
+    char nt[8] = "";
+    GetEnvironmentVariableA("DISPD_NOTITLES", nt, sizeof nt);
+    if (nt[0] == '1')
+        g_srv.title_h = 0;
 
     char ffmv[8] = "";
     GetEnvironmentVariableA("DISPD_FFM", ffmv, sizeof ffmv);
