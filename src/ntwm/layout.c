@@ -30,7 +30,7 @@ Client *cl_find(unsigned id)
     return NULL;
 }
 
-Client *cl_add(unsigned id, int ws)
+Client *cl_add(unsigned id, int ws, int floating)
 {
     if (cl_find(id))
         return NULL;
@@ -39,6 +39,7 @@ Client *cl_add(unsigned id, int ws)
         return NULL;
     c->id = id;
     c->ws = ws;
+    c->floating = floating;   /* restaura floating do snapshot (#33) */
     strncpy(c->title, "terminal", sizeof c->title - 1);
     c->next = g_clients;    /* prepend: novo vira master (dwm attach) */
     g_clients = c;
@@ -66,10 +67,21 @@ void cl_remove(unsigned id)
     free(c);
 }
 
+/* janela movida de workspace por tagto(): comunicada ao dispd DENTRO do frame
+ * (senao um PLACE 1x1 isolado, se perdido, deixa dispd e ntwm divergentes #28) */
+static unsigned g_move_id;
+static int      g_move_ws;
+static int      g_move_pending;
+
 /* dwm tile(): master-stack em duas colunas, com gaps uniformes. */
 void send_frame(void)
 {
     wm_send(CMD_FRAME_BEGIN);
+    wm_send("%s %d", CMD_WORKSPACE, g_curws);   /* ws atomico com o layout (#27) */
+    if (g_move_pending) {                        /* move de ws dentro do frame (#28) */
+        wm_send("%s %u %d", CMD_SETWS, g_move_id, g_move_ws);
+        g_move_pending = 0;
+    }
 
     /* conta so os tiled (nao-floating) do ws atual */
     int n = 0;
@@ -187,8 +199,7 @@ void view(int ws)
 {
     if (ws == g_curws)
         return;
-    g_curws = ws;
-    wm_send("%s %d", CMD_WORKSPACE, ws);
+    g_curws = ws;                      /* WORKSPACE vai dentro do frame (send_frame) */
     g_focused = NULL;
     for (Client *c = g_clients; c; c = c->next)
         if (c->ws == ws) { g_focused = c; break; }
@@ -197,12 +208,13 @@ void view(int ws)
 
 void tagto(int ws)
 {
-    if (!g_focused)
+    if (!g_focused || ws < 0 || ws >= 32)
         return;
     Client *moved = g_focused;
     moved->ws = ws;
-    /* avisa o dispd do novo ws da janela movida (fica escondida) — #4 */
-    wm_send("%s %u 0 0 1 1 %d 0", CMD_PLACE, moved->id, ws);
+    /* avisa o dispd do novo ws da janela movida DENTRO do frame (#28), sem
+     * redimensionar (WS, nao PLACE 1x1 que destruiria a grade do terminal). */
+    g_move_id = moved->id; g_move_ws = ws; g_move_pending = 1;
     /* foco vai pra outra janela do ws atual — #5 */
     g_focused = NULL;
     for (Client *c = g_clients; c; c = c->next)
@@ -237,6 +249,7 @@ void togglefloating(void)
 {
     if (g_focused) {
         g_focused->floating = !g_focused->floating;
+        wm_send("%s %u %d", CMD_FLOAT, g_focused->id, g_focused->floating);   /* persiste (#33) */
         send_frame();
     }
 }

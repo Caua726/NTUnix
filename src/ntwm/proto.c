@@ -51,9 +51,20 @@ int wm_read(char *buf, int cap)
 {
     if (g_pipe == INVALID_HANDLE_VALUE)
         return -1;
-    DWORD n = 0;
-    BOOL ok = ReadFile(g_pipe, buf, (DWORD)cap - 1, &n, NULL);
-    if (!ok && GetLastError() != ERROR_MORE_DATA)
-        return -1;
-    return (int)n;
+    /* remonta fragmentos: uma mensagem maior que o buffer chega em varios
+     * ReadFile com ERROR_MORE_DATA — sem juntar, viravam eventos falsos (#77) */
+    int total = 0;
+    for (;;) {
+        DWORD n = 0;
+        BOOL ok = ReadFile(g_pipe, buf + total, (DWORD)(cap - 1 - total), &n, NULL);
+        total += (int)n;
+        if (ok)
+            return total;                       /* mensagem completa */
+        if (GetLastError() == ERROR_MORE_DATA) {
+            if (total >= cap - 1)
+                return total;                   /* buffer cheio: entrega o que cabe */
+            continue;                           /* le o resto da mensagem */
+        }
+        return total > 0 ? total : -1;
+    }
 }

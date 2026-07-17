@@ -29,14 +29,15 @@
 #define EVT_WELCOME    "WELCOME"      /* WELCOME dispd <ver> <root>            */
 #define EVT_OUTPUT     "OUTPUT"       /* OUTPUT <oid> <x> <y> <w> <h>          */
 #define EVT_CURWS      "CURWS"        /* CURWS <n>  (workspace atual, no snapshot) */
-#define EVT_WINDOW     "WINDOW"       /* WINDOW <wid> <kind> <pid> <ws> <title...>  (snapshot) */
+#define EVT_WINDOW     "WINDOW"       /* WINDOW <wid> <kind> <pid> <ws> <float> <title...>  (snapshot) */
 #define EVT_CREATED    "WINDOW-CREATED" /* <wid> <kind> <pid> <title...>  (novo no ws atual) */
 #define EVT_DESTROYED  "WINDOW-DESTROYED" /* <wid> */
 #define EVT_TITLE      "WINDOW-TITLE"  /* <wid> <title...> */
 #define EVT_FOCUSED    "FOCUSED"      /* <wid>  (foco mudou no dispd, ex.: mouse) */
 #define EVT_KEY        "KEY"          /* KEY <mods> <vk>  (so combos com grab) */
 #define EVT_SYNC       "SYNC"
-#define EVT_ERR        "ERR"
+#define EVT_RESYNC     "RESYNC"       /* dispd perdeu comandos -> WM re-declara o quadro */
+#define EVT_ERR        "ERR"          /* ERR <motivo...> */
 
 /* comandos ntwm -> dispd */
 #define CMD_HELLO      "HELLO"        /* HELLO ntwm <ver> */
@@ -44,11 +45,13 @@
 #define CMD_PLACE      "PLACE"        /* PLACE <wid> <x> <y> <w> <h> <ws> <z> */
 #define CMD_FOCUS      "FOCUS"        /* FOCUS <wid> */
 #define CMD_WORKSPACE  "WORKSPACE"    /* WORKSPACE <n> */
+#define CMD_SETWS      "WS"           /* WS <wid> <n>  (muda o ws da janela sem redimensionar) */
 #define CMD_BORDER     "BORDER"       /* BORDER <wid> <px> <rrggbb> */
 #define CMD_TITLEBAR   "TITLEBAR"     /* TITLEBAR <wid> <on|off> <text...> */
 #define CMD_FRAME_COMMIT "FRAME-COMMIT"
 #define CMD_SPAWN      "SPAWN-TERM"   /* SPAWN-TERM [cmdline...] */
 #define CMD_CLOSE      "CLOSE"        /* CLOSE <wid> */
+#define CMD_FLOAT      "FLOAT"        /* FLOAT <wid> <0|1>  (persiste no dispd p/ restart) */
 #define CMD_GRAB       "GRAB"         /* GRAB <mods> <vk> */
 #define CMD_UNGRAB     "UNGRAB"       /* UNGRAB <mods> <vk> */
 #define CMD_QUIT       "QUIT"

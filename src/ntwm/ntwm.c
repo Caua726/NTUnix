@@ -112,7 +112,7 @@ static void handle(char *line)
 
     /* titulo (ultimo campo) e' tomado verbatim conforme o verbo */
     int tail = -1;
-    if (!strcmp(verb, EVT_WINDOW)) tail = 5;        /* WINDOW id kind pid ws title */
+    if (!strcmp(verb, EVT_WINDOW)) tail = 6;        /* WINDOW id kind pid ws float title */
     else if (!strcmp(verb, EVT_CREATED)) tail = 4;  /* WINDOW-CREATED id kind pid title */
     else if (!strcmp(verb, EVT_TITLE)) tail = 2;    /* WINDOW-TITLE id title */
 
@@ -122,6 +122,8 @@ static void handle(char *line)
         return;
 
     if (!strcmp(verb, EVT_WELCOME)) {
+        if (n >= 3 && atoi(av[2]) != NTUWM_PROTO_VER)   /* valida versao (#65) */
+            return;                                     /* dispd incompativel: nao opera */
         register_grabs();
     } else if (!strcmp(verb, EVT_OUTPUT) && n >= 6) {
         g_wx = atoi(av[2]); g_wy = atoi(av[3]);
@@ -129,10 +131,12 @@ static void handle(char *line)
     } else if (!strcmp(verb, EVT_CURWS) && n >= 2) {
         g_curws = atoi(av[1]);                       /* restart-survival (#11) */
     } else if (!strcmp(verb, EVT_WINDOW) && n >= 5) {
-        Client *c = cl_add((unsigned)strtoul(av[1], NULL, 10), atoi(av[4]));
-        if (n >= 6) set_title(c, av[5]);             /* snapshot: tila no SYNC */
+        int ws = atoi(av[4]);
+        int fl = n >= 6 ? atoi(av[5]) : 0;           /* floating do snapshot (#33) */
+        Client *c = cl_add((unsigned)strtoul(av[1], NULL, 10), ws, fl);
+        if (n >= 7) set_title(c, av[6]);             /* snapshot: tila no SYNC */
     } else if (!strcmp(verb, EVT_CREATED) && n >= 2) {
-        Client *c = cl_add((unsigned)strtoul(av[1], NULL, 10), g_curws);
+        Client *c = cl_add((unsigned)strtoul(av[1], NULL, 10), g_curws, 0);
         if (n >= 5) set_title(c, av[4]);             /* #40 */
         send_frame();
     } else if (!strcmp(verb, EVT_DESTROYED) && n >= 2) {
@@ -145,8 +149,8 @@ static void handle(char *line)
     } else if (!strcmp(verb, EVT_KEY) && n >= 3) {
         on_key((unsigned)strtoul(av[1], NULL, 16),
                (unsigned)strtoul(av[2], NULL, 16));
-    } else if (!strcmp(verb, EVT_SYNC)) {
-        send_frame();               /* layout inicial apos o snapshot */
+    } else if (!strcmp(verb, EVT_SYNC) || !strcmp(verb, EVT_RESYNC)) {
+        send_frame();               /* layout inicial (SYNC) ou re-declaracao (RESYNC #71) */
     }
 }
 

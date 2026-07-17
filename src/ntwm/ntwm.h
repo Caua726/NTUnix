@@ -36,7 +36,7 @@ void wm_send(const char *fmt, ...);
 int  wm_read(char *buf, int cap);
 
 /* layout.c */
-Client *cl_add(unsigned id, int ws);
+Client *cl_add(unsigned id, int ws, int floating);
 void    cl_remove(unsigned id);
 Client *cl_find(unsigned id);
 void    send_frame(void);

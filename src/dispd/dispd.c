@@ -151,10 +151,11 @@ static int frame_tick(void)   /* retorna 1 se apresentou um quadro */
         builtin_layout();
 
     /* transacao de layout aberta (FRAME-BEGIN sem COMMIT): nao apresenta um
-     * quadro parcial (#10). Safety: se travar >60 ticks, libera. */
+     * quadro parcial (#10). Safety: se travar >60 ticks, DESCARTA o quadro
+     * (nao publica parcial) e volta ao ultimo estado bom (#30). */
     static int frame_wait;
     if (g_srv.in_frame) {
-        if (++frame_wait > 60) { g_srv.in_frame = 0; frame_wait = 0; }
+        if (++frame_wait > 60) { wmproto_abort_frame(); frame_wait = 0; }
         return 0;
     }
     frame_wait = 0;
