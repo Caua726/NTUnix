@@ -227,7 +227,8 @@ void input_install_hook(void)
 {
     char d[8] = "";
     GetEnvironmentVariableA("DISPD_DEBUG", d, sizeof d);
-    g_srv.debug = (d[0] == '1');
+    g_srv.debug = 1;   /* TEMP DIAGNOSTICO: forca k:N/rx na barra (reverter p/ (d[0]=='1')) */
+    (void)d;
 
     g_hook = SetWindowsHookExA(WH_KEYBOARD_LL, ll_proc, GetModuleHandleA(NULL), 0);
     if (!g_hook)

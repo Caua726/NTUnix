@@ -34,10 +34,18 @@ void dispd_log(const char *fmt, ...)
 
 Window *spawn_terminal(const char *cmdline)
 {
-    char def[MAX_PATH + 32], bb[MAX_PATH];
+    char def[MAX_PATH + 64], bb[MAX_PATH];
     if (!cmdline) {
-        ntu_path("/system/bin/busybox.exe", bb, sizeof bb);
-        snprintf(def, sizeof def, "\"%s\" ash -i", bb);
+        char shell[32] = "";
+        GetEnvironmentVariableA("DISPD_SHELL", shell, sizeof shell);
+        if (!_stricmp(shell, "ash")) {
+            ntu_path("/system/bin/busybox.exe", bb, sizeof bb);
+            snprintf(def, sizeof def, "\"%s\" ash -i", bb);
+        } else {
+            /* DIAGNOSTICO: cmd.exe isola ConPTY/render/input do busybox-ash.
+             * (DISPD_SHELL=ash volta pro ash; reverter default quando resolver) */
+            snprintf(def, sizeof def, "cmd.exe");
+        }
         cmdline = def;
     }
 
