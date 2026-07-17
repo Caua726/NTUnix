@@ -176,34 +176,51 @@ static int frame_tick(void)   /* retorna 1 se apresentou um quadro */
     return need;
 }
 
+static void focus_at(int x, int y)
+{
+    Window *w = win_at_point(x, y);
+    if (w && w != g_srv.focused) {
+        win_focus(w);
+        wmproto_ev_focused(w);   /* mantem o ntwm em sincronia (#9) */
+    }
+}
+
 static LRESULT CALLBACK root_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
 {
+    /* raiz e' fullscreen em (0,0) -> coordenadas de cliente == tela */
+    int mx = (short)LOWORD(lp), my = (short)HIWORD(lp);
     switch (m) {
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
-        /* fallback: SO quando o hook LL nao esta ativo (evita duplo #24). */
+        /* fallback: SO quando o hook LL nao esta ativo (evita duplo). */
         if (!input_hook_active())
             input_key((unsigned)wp, (unsigned)((lp >> 16) & 0xff));
         return 0;
+    case WM_KEYUP:
+    case WM_SYSKEYUP:
+        if (!input_hook_active())
+            input_keyup((unsigned)wp, (unsigned)((lp >> 16) & 0xff));   /* #13 */
+        return 0;
     case WM_SYSCHAR:
         return 0;               /* engole o beep do Alt+tecla */
-    case WM_LBUTTONDOWN: {
-        Window *w = win_at_point(LOWORD(lp), HIWORD(lp));
-        if (w && w != g_srv.focused) {
-            win_focus(w);
-            wmproto_ev_focused(w);   /* mantem o ntwm em sincronia (#9) */
-        }
+    case WM_LBUTTONDOWN: focus_at(mx, my); input_mouse(mx, my, 0, 1, 0); return 0;
+    case WM_LBUTTONUP:   input_mouse(mx, my, 0, 0, 0); return 0;
+    case WM_RBUTTONDOWN: focus_at(mx, my); input_mouse(mx, my, 2, 1, 0); return 0;
+    case WM_RBUTTONUP:   input_mouse(mx, my, 2, 0, 0); return 0;
+    case WM_MBUTTONDOWN: focus_at(mx, my); input_mouse(mx, my, 1, 1, 0); return 0;
+    case WM_MBUTTONUP:   input_mouse(mx, my, 1, 0, 0); return 0;
+    case WM_MOUSEWHEEL: {
+        int up = GET_WHEEL_DELTA_WPARAM(wp) > 0;
+        input_mouse(mx, my, up ? 64 : 65, 1, 0);   /* wheel como botao 64/65 */
         return 0;
     }
-    case WM_MOUSEMOVE:
-        if (g_srv.ffm) {
-            Window *w = win_at_point(LOWORD(lp), HIWORD(lp));
-            if (w && w != g_srv.focused) {
-                win_focus(w);
-                wmproto_ev_focused(w);
-            }
-        }
+    case WM_MOUSEMOVE: {
+        int btn = (wp & MK_LBUTTON) ? 0 : (wp & MK_MBUTTON) ? 1 :
+                  (wp & MK_RBUTTON) ? 2 : -1;
+        if (g_srv.ffm) focus_at(mx, my);
+        input_mouse(mx, my, btn, 0, 1);   /* motion */
         return 0;
+    }
     case WM_CLOSE:
     case WM_DESTROY:
         g_srv.running = 0;

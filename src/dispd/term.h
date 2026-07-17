@@ -116,6 +116,8 @@ Terminal *term_create(const char *cmdline, int cols, int rows, struct Window *wi
 void      term_destroy(Terminal *t);
 void      term_input(Terminal *t, const char *bytes, int n);
 void      term_resize(Terminal *t, int cols, int rows);
+/* encaminha um evento de mouse ao pty se o programa habilitou rastreio (#9) */
+void      term_mouse(Terminal *t, int col, int row, int button, int press, int motion);
 
 /* backends (retornam 0 em sucesso) */
 int  term_conpty_start(Terminal *t, const char *cmdline, int cols, int rows);

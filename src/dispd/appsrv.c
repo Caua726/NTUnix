@@ -123,10 +123,11 @@ static void app_send(AppConn *c, const char *line)
         InterlockedExchange(&c->dead, 1);
 }
 
-void appsrv_input_key(unsigned id, unsigned mods, unsigned vk, unsigned ch)
+void appsrv_input_key(unsigned id, unsigned mods, unsigned vk, unsigned ch, int down)
 {
     AppConn *c = conns_find(id);
-    if (c) { char b[64]; snprintf(b, sizeof b, "APP-KEY %x %x %x", mods, vk, ch); app_send(c, b); }
+    if (c) { char b[64]; snprintf(b, sizeof b, "APP-KEY %x %x %x %d", mods, vk, ch, down ? 1 : 0);
+             app_send(c, b); }   /* #10: acao down/up */
 }
 
 void appsrv_input_mouse(unsigned id, int x, int y, int buttons)

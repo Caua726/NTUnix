@@ -94,7 +94,9 @@ Window  *win_at_point(int x, int y);   /* topo visivel no ws atual */
 void     input_install_hook(void);
 void     input_process_keys(void);   /* main thread: drena e roteia (frame_tick) */
 int      input_hook_active(void);
-void     input_key(unsigned vk, unsigned scan);   /* fallback WM_KEYDOWN */
+void     input_key(unsigned vk, unsigned scan);     /* fallback WM_KEYDOWN */
+void     input_keyup(unsigned vk, unsigned scan);   /* fallback WM_KEYUP (#13) */
+void     input_mouse(int x, int y, int button, int press, int motion);  /* #8/#9 */
 
 /* wmproto.c */
 void     wmproto_start(void);                 /* sobe o servidor de pipe (thread) */
@@ -111,7 +113,7 @@ void     wmproto_ev_key(unsigned mods, unsigned vk);
 void     appsrv_start(void);   /* sobe o servidor multi-cliente (thread) */
 void     appsrv_drain(void);   /* main thread: aplica pedidos dos apps */
 void     appsrv_close_wid(unsigned id);            /* fecha a conexao do app */
-void     appsrv_input_key(unsigned id, unsigned mods, unsigned vk, unsigned ch);
+void     appsrv_input_key(unsigned id, unsigned mods, unsigned vk, unsigned ch, int down);
 void     appsrv_input_mouse(unsigned id, int x, int y, int buttons);
 
 /* dispd.c */
