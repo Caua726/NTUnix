@@ -16,6 +16,14 @@ int ntu_ini_parse(const char *win_path, ntu_ini_fn fn, void *ud)
     char line[1024];
 
     while (fgets(line, sizeof line, f)) {
+        /* linha maior que o buffer: descarta o resto e rejeita, para nao virar
+         * varias "linhas" com chaves/valores parciais (#48) */
+        if (!strchr(line, '\n') && !feof(f)) {
+            int ch;
+            while ((ch = fgetc(f)) != '\n' && ch != EOF)
+                ;
+            continue;
+        }
         ntu_trim(line);
         if (!line[0] || line[0] == '#' || line[0] == ';')
             continue;

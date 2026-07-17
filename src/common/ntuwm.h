@@ -19,6 +19,10 @@
 
 #define NTUWM_PROTO_VER 1
 
+/* numero de workspaces do desktop — unico limite compartilhado (#4): o dispd
+ * valida, a barra desenha e o ntwm mapeia Alt+1..9 exatamente esta faixa. */
+#define NTUWM_WS 9
+
 /* Modificadores: usamos os do windows.h (MOD_ALT=1, MOD_CONTROL=2,
  * MOD_SHIFT=4, MOD_WIN=8 — os mesmos do RegisterHotKey). So aliasamos CTRL. */
 #ifndef MOD_CTRL

@@ -259,7 +259,7 @@ static void apply_now(char *line)
             if (x < -xlim) x = -xlim; else if (x > xlim) x = xlim;
             if (y < -ylim) y = -ylim; else if (y > ylim) y = ylim;
             int ws = atoi(av[6]);
-            if (ws < 0 || ws >= 32) ws = w->ws;               /* valida ws (#43) */
+            if (ws < 0 || ws >= NTUWM_WS) ws = w->ws;               /* valida ws (#43) */
             w->rect.left = (int)x; w->rect.top = (int)y;
             w->rect.right = (int)(x + ww); w->rect.bottom = (int)(y + hh);
             w->ws = ws;
@@ -271,7 +271,7 @@ static void apply_now(char *line)
         win_focus(win_find((unsigned)strtoul(av[1], NULL, 10)));  /* 0 -> NULL */
     } else if (!strcmp(v, CMD_WORKSPACE) && n >= 2) {
         int ws = atoi(av[1]);
-        if (ws >= 0 && ws < 32)
+        if (ws >= 0 && ws < NTUWM_WS)
             g_srv.cur_ws = ws;
     } else if (!strcmp(v, CMD_BORDER) && n >= 4) {
         Window *w = win_find((unsigned)strtoul(av[1], NULL, 10));
@@ -284,20 +284,12 @@ static void apply_now(char *line)
     } else if (!strcmp(v, CMD_SETWS) && n >= 3) {
         Window *w = win_find((unsigned)strtoul(av[1], NULL, 10));
         int ws = atoi(av[2]);                       /* muda ws sem redimensionar (#28) */
-        if (w && ws >= 0 && ws < 32) w->ws = ws;
+        if (w && ws >= 0 && ws < NTUWM_WS) w->ws = ws;
     } else if (!strcmp(v, CMD_FLOAT) && n >= 3) {
         Window *w = win_find((unsigned)strtoul(av[1], NULL, 10));
         if (w) w->floating = atoi(av[2]) ? 1 : 0;   /* persiste p/ restart (#33) */
     } else if (!strcmp(v, CMD_CLOSE) && n >= 2) {
-        Window *w = win_find((unsigned)strtoul(av[1], NULL, 10));
-        if (w) {
-            unsigned id = w->id;
-            int is_app = (w->kind == WK_APP);
-            win_destroy(w);
-            wmproto_ev_destroyed(id);
-            if (is_app)
-                appsrv_close_wid(id);      /* mata o processo do app (#3) */
-        }
+        dispd_close_window(win_find((unsigned)strtoul(av[1], NULL, 10)));   /* #3/#54 */
     } else if (!strcmp(v, CMD_GRAB) && n >= 3) {
         grab_add((unsigned)strtoul(av[1], NULL, 16), (unsigned)strtoul(av[2], NULL, 16));
     } else if (!strcmp(v, CMD_UNGRAB) && n >= 3) {

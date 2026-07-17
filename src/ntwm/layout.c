@@ -90,6 +90,13 @@ void send_frame(void)
             n++;
 
     int g = g_gap;
+    /* nao deixa os gaps consumirem toda a area: mesmo com as n janelas numa
+     * coluna, cada uma precisa de >=1px, senao alturas ficam negativas (#38) */
+    if (n > 1) {
+        int gmax = (g_wh - 2 * g_gap - n) / (n - 1);
+        if (gmax < 0) gmax = 0;
+        if (g > gmax) g = gmax;
+    }
     if (n > 0) {
         int wx = g_wx + g, wy = g_wy + g;
         int ww = g_ww - 2 * g, wh = g_wh - 2 * g;
@@ -190,8 +197,8 @@ void setmfact(float d)
 void incnmaster(int d)
 {
     g_nmaster += d;
-    if (g_nmaster < 0)
-        g_nmaster = 0;
+    if (g_nmaster < 0)  g_nmaster = 0;
+    if (g_nmaster > 16) g_nmaster = 16;   /* teto (#39: evita overflow/absurdo) */
     send_frame();
 }
 
@@ -208,7 +215,7 @@ void view(int ws)
 
 void tagto(int ws)
 {
-    if (!g_focused || ws < 0 || ws >= 32)
+    if (!g_focused || ws < 0 || ws >= NTUWM_WS)
         return;
     Client *moved = g_focused;
     moved->ws = ws;

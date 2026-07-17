@@ -18,18 +18,46 @@
 
 unsigned g_mod = MOD_ALT;
 
+/* parse estrito: rejeita lixo/conversao parcial (#47) */
+static int parse_int(const char *s, int *out)
+{
+    char *end;
+    long v = strtol(s, &end, 10);
+    while (*end == ' ' || *end == '\t') end++;
+    if (end == s || *end)
+        return 0;
+    *out = (int)v;
+    return 1;
+}
+
+static int parse_flt(const char *s, double *out)
+{
+    char *end;
+    double v = strtod(s, &end);
+    while (*end == ' ' || *end == '\t') end++;
+    if (end == s || *end)
+        return 0;
+    *out = v;
+    return 1;
+}
+
 static void cfg_kv(const char *sec, const char *key, const char *val, void *ud)
 {
-    (void)sec; (void)ud;
-    /* tudo clampeado para nao gerar geometria absurda (#34) */
+    (void)ud;
+    if (sec[0] && _stricmp(sec, "ntwm"))   /* so [ntwm] ou sem secao (#46) */
+        return;
+    int iv;
+    double fv;
+    /* tudo clampeado para nao gerar geometria absurda (#34); valor invalido
+     * mantem o default em vez de virar zero (#47) */
     if (!_stricmp(key, "nmaster")) {
-        int v = atoi(val); g_nmaster = v < 0 ? 0 : (v > 16 ? 16 : v);
+        if (parse_int(val, &iv)) g_nmaster = iv < 0 ? 0 : (iv > 16 ? 16 : iv);
     } else if (!_stricmp(key, "mfact")) {
-        double f = atof(val); if (f >= 0.05 && f <= 0.95) g_mfact = (float)f;
+        if (parse_flt(val, &fv) && fv >= 0.05 && fv <= 0.95) g_mfact = (float)fv;
     } else if (!_stricmp(key, "gap")) {
-        int v = atoi(val); g_gap = v < 0 ? 0 : (v > 200 ? 200 : v);
+        if (parse_int(val, &iv)) g_gap = iv < 0 ? 0 : (iv > 200 ? 200 : iv);
     } else if (!_stricmp(key, "border")) {
-        int v = atoi(val); g_border = v < 0 ? 0 : (v > 32 ? 32 : v);
+        if (parse_int(val, &iv)) g_border = iv < 0 ? 0 : (iv > 32 ? 32 : iv);
     } else if (!_stricmp(key, "mod")) {
         g_mod = !_stricmp(val, "win") ? MOD_WIN : MOD_ALT;
     }

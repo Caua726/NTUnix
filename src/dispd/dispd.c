@@ -66,6 +66,20 @@ Window *spawn_terminal(const char *cmdline)
     return w;
 }
 
+/* fecha uma janela por qualquer caminho (WM, builtin, atalho): destroi a
+ * superficie, avisa o ntwm e — se for app — encerra o processo/conexao (#54) */
+void dispd_close_window(Window *w)
+{
+    if (!w)
+        return;
+    unsigned id = w->id;
+    int is_app = (w->kind == WK_APP);
+    win_destroy(w);
+    wmproto_ev_destroyed(id);
+    if (is_app)
+        appsrv_close_wid(id);
+}
+
 /* layout embutido (so quando nao ha ntwm): pilha vertical com margem. */
 static void builtin_layout(void)
 {

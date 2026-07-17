@@ -120,6 +120,7 @@ void     appsrv_input_mouse(unsigned id, int x, int y, int buttons);
 
 /* dispd.c */
 Window  *spawn_terminal(const char *cmdline);  /* cria janela WK_TERM + pty */
+void     dispd_close_window(Window *w);        /* fecha janela + conexao do app (#54) */
 void     dispd_log(const char *fmt, ...);
 
 #endif

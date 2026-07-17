@@ -416,9 +416,15 @@ void compose_and_present(void)
                       DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         }
 
-        /* conteudo (terminal/app) abaixo da barra de titulo */
-        BitBlt(g_srv.cdc, ix, iy + g_srv.title_h, w->cw, w->ch,
-               w->memdc, 0, 0, SRCCOPY);
+        /* conteudo (terminal/app) abaixo da barra de titulo, SEMPRE clipado a
+         * area cliente: uma surface de app maior que o tile nao pode invadir a
+         * janela vizinha nem sobrar fundo de borda (#49) */
+        int ih = (w->rect.bottom - w->rect.top) - 2 * w->border_px - g_srv.title_h;
+        int bw = w->cw < iw ? w->cw : iw;
+        int bh = w->ch < ih ? w->ch : ih;
+        if (bw > 0 && bh > 0)
+            BitBlt(g_srv.cdc, ix, iy + g_srv.title_h, bw, bh,
+                   w->memdc, 0, 0, SRCCOPY);
     }
 
     draw_bar();

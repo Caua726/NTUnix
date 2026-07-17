@@ -25,6 +25,7 @@
 typedef struct AppConn {
     volatile LONG wid;
     HANDLE pipe;
+    DWORD  pid;               /* PID do processo do app (do named pipe, #52) */
     HANDLE rev, wev, ready;   /* eventos: read, write, ready(main confirmou) */
     CRITICAL_SECTION wlock;   /* serializa escritas do main/worker */
     volatile LONG dead;
@@ -139,7 +140,14 @@ void appsrv_input_mouse(unsigned id, int x, int y, int buttons)
 void appsrv_close_wid(unsigned id)
 {
     AppConn *c = conns_find(id);
-    if (c) CancelIoEx(c->pipe, NULL);   /* desbloqueia a leitora -> worker sai */
+    if (!c)
+        return;
+    app_send(c, "APP-CLOSE-REQUEST");   /* pedido cooperativo (app pode salvar) */
+    if (c->pid) {                        /* garante o fim do processo (#53) */
+        HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, c->pid);
+        if (h) { TerminateProcess(h, 0); CloseHandle(h); }
+    }
+    CancelIoEx(c->pipe, NULL);           /* desbloqueia a leitora -> worker sai */
 }
 
 /* ---- main thread: aplica os pedidos ---- */
@@ -151,6 +159,7 @@ void appsrv_drain(void)
         if (it.type == AQ_CREATE) {
             Window *w = win_create_shared(it.w, it.h, it.section);
             if (w) {
+                w->pid = it.conn->pid;   /* #52: janela conhece o processo dono */
                 strncpy(w->title, it.title, sizeof w->title - 1);
                 w->title[sizeof w->title - 1] = 0;
                 for (char *p = w->title; *p; p++)          /* #17 sem injecao */
@@ -189,9 +198,18 @@ static DWORD WINAPI worker_main(LPVOID arg)
     AppConn *c = (AppConn *)calloc(1, sizeof *c);
     if (!c) { CloseHandle(pipe); return 0; }
     c->pipe = pipe;
+    GetNamedPipeClientProcessId(pipe, &c->pid);   /* dono da conexao (#52) */
     c->rev = CreateEventA(NULL, TRUE, FALSE, NULL);
     c->wev = CreateEventA(NULL, TRUE, FALSE, NULL);
     c->ready = CreateEventA(NULL, TRUE, FALSE, NULL);
+    if (!c->rev || !c->wev || !c->ready) {        /* #91: falha transacional */
+        if (c->rev) CloseHandle(c->rev);
+        if (c->wev) CloseHandle(c->wev);
+        if (c->ready) CloseHandle(c->ready);
+        CloseHandle(pipe);
+        free(c);
+        return 0;
+    }
     InitializeCriticalSection(&c->wlock);
     conns_add(c);
 

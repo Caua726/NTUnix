@@ -128,7 +128,7 @@ static int builtin_key(unsigned mods, DWORD vk)
         return 1;
     }
     if (vk == 'Q') {
-        if (g_srv.focused) win_destroy(g_srv.focused);
+        if (g_srv.focused) dispd_close_window(g_srv.focused);   /* #54 */
         return 1;
     }
     return 0;
