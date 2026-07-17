@@ -10,7 +10,11 @@ Terminal *term_create(const char *cmdline, int cols, int rows, struct Window *wi
     if (!t)
         return NULL;
     InitializeCriticalSection(&t->lock);
-    vt_init(t, cols, rows);
+    if (vt_init(t, cols, rows) != 0) {   /* #105: grade nula nao vira terminal */
+        DeleteCriticalSection(&t->lock);
+        free(t);
+        return NULL;
+    }
     t->win = win;
     t->alive = 1;
 

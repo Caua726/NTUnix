@@ -72,8 +72,8 @@ static void scrape_frame(Terminal *t, Scrape *s)
                 Cell *c = &t->grid[(y0 + y) * t->cols + x];
                 unsigned char ch = (unsigned char)ci->Char.AsciiChar;
                 c->ch = ch ? ch : ' ';
-                c->fg = win_to_ansi(ci->Attributes, 0);
-                c->bg = win_to_ansi(ci->Attributes, 1);
+                c->fg = vt_ansi_color(win_to_ansi(ci->Attributes, 0));
+                c->bg = vt_ansi_color(win_to_ansi(ci->Attributes, 1));
                 c->attr = 0;
             }
         }
@@ -94,7 +94,7 @@ static DWORD WINAPI reader_main(LPVOID arg)
             break;
     }
     scrape_frame(t, s);   /* ultimo quadro */
-    t->alive = 0;
+    InterlockedExchange(&t->alive, 0);   /* #86 */
     return 0;
 }
 

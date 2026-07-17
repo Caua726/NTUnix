@@ -260,6 +260,11 @@ int main(void)
     GetEnvironmentVariableA("DISPD_SELFTEST", bk, sizeof bk);
     g_srv.selftest = (bk[0] == '1');
 
+    /* os terminais filhos herdam o ambiente do dispd: anuncia um TERM decente
+     * pra que o shell habilite cores/edicao de linha. */
+    if (!GetEnvironmentVariableA("TERM", bk, sizeof bk) || !bk[0])
+        SetEnvironmentVariableA("TERM", "xterm-256color");
+
     g_srv.root = make_root();
     if (!g_srv.root) {
         dispd_log("nao consegui criar a janela raiz (%lu)", GetLastError());

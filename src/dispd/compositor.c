@@ -396,7 +396,7 @@ void compose_and_present(void)
                 (g_srv.debug || w->term->rx == 0 || !w->term->alive))
                 snprintf(lbl, sizeof lbl, "%s  [%s rx:%ld a:%d]", base,
                          w->term->be ? w->term->be->name : "?",
-                         w->term->rx, w->term->alive);
+                         w->term->rx, (int)w->term->alive);
             else
                 snprintf(lbl, sizeof lbl, "%s", base);
             RECT tr = { ix + 6, iy, ix + iw - 6, iy + g_srv.title_h };

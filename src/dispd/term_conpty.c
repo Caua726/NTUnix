@@ -56,7 +56,7 @@ static DWORD WINAPI reader_main(LPVOID arg)
             break;                 /* EOF: filho saiu / pipe fechado */
         vt_feed(t, buf, (int)n);
     }
-    t->alive = 0;
+    InterlockedExchange(&t->alive, 0);   /* #86 */
     return 0;
 }
 
@@ -95,6 +95,7 @@ static int conpty_start(Terminal *t, const char *cmdline, int cols, int rows)
     if (!c)
         return -1;
     t->impl = c;
+    t->backend_is_pty = 1;   /* aceita respostas a DSR/DA (write-back destrava ash) */
 
     HANDLE in_r = INVALID_HANDLE_VALUE, out_w = INVALID_HANDLE_VALUE;
     if (!CreatePipe(&in_r, &c->in_w, NULL, 0) ||
