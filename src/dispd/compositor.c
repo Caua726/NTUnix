@@ -424,6 +424,67 @@ static int glass_opacity(void)
     return op;
 }
 
+/* ---- frosted glass: blur do fundo atras das janelas translucidas ----
+ * modernizacao (picom/hyprland fazem box-blur separavel do backbuffer atras da
+ * superficie translucida). DISPD_BLUR=0 desliga; senao e' o raio (default 5). */
+static int blur_radius(void)
+{
+    static int r = -1;
+    if (r < 0) {
+        char v[8] = "";
+        GetEnvironmentVariableA("DISPD_BLUR", v, sizeof v);
+        if (v[0]) { r = atoi(v); if (r < 0) r = 0; if (r > 40) r = 40; }
+        else r = 5;
+    }
+    return r;
+}
+
+static unsigned char *g_blur_scratch;
+static size_t g_blur_scratch_cap;
+
+/* box blur separavel (sliding-window, O(area) independe do raio) do retangulo
+ * [x0,x1) x [y0,y1) do backbuffer, IN-PLACE. So os canais BGR. */
+static void blur_bg(unsigned char *dst, int stride, int x0, int y0, int x1, int y1, int r)
+{
+    int w = x1 - x0, h = y1 - y0;
+    if (r < 1 || w < 1 || h < 1)
+        return;
+    size_t need = (size_t)w * h * 4;
+    if (need > g_blur_scratch_cap) {
+        unsigned char *ns = (unsigned char *)realloc(g_blur_scratch, need);
+        if (!ns) return;
+        g_blur_scratch = ns;
+        g_blur_scratch_cap = need;
+    }
+    unsigned char *tmp = g_blur_scratch;
+    int tstride = w * 4;
+    /* horizontal: dst -> tmp */
+    for (int y = 0; y < h; y++) {
+        const unsigned char *drow = dst + (size_t)(y0 + y) * stride + (size_t)x0 * 4;
+        unsigned char *trow = tmp + (size_t)y * tstride;
+        int s0 = 0, s1 = 0, s2 = 0, win = 0;
+        for (int x = 0; x <= r && x < w; x++) { s0 += drow[x*4]; s1 += drow[x*4+1]; s2 += drow[x*4+2]; win++; }
+        for (int x = 0; x < w; x++) {
+            trow[x*4] = (unsigned char)(s0/win); trow[x*4+1] = (unsigned char)(s1/win); trow[x*4+2] = (unsigned char)(s2/win);
+            int add = x + r + 1, sub = x - r;
+            if (add < w) { s0 += drow[add*4]; s1 += drow[add*4+1]; s2 += drow[add*4+2]; win++; }
+            if (sub >= 0) { s0 -= drow[sub*4]; s1 -= drow[sub*4+1]; s2 -= drow[sub*4+2]; win--; }
+        }
+    }
+    /* vertical: tmp -> dst */
+    for (int x = 0; x < w; x++) {
+        int s0 = 0, s1 = 0, s2 = 0, win = 0;
+        for (int y = 0; y <= r && y < h; y++) { const unsigned char *t = tmp + (size_t)y*tstride + x*4; s0 += t[0]; s1 += t[1]; s2 += t[2]; win++; }
+        for (int y = 0; y < h; y++) {
+            unsigned char *d = dst + (size_t)(y0 + y) * stride + (size_t)(x0 + x) * 4;
+            d[0] = (unsigned char)(s0/win); d[1] = (unsigned char)(s1/win); d[2] = (unsigned char)(s2/win);
+            int add = y + r + 1, sub = y - r;
+            if (add < h) { const unsigned char *t = tmp + (size_t)add*tstride + x*4; s0 += t[0]; s1 += t[1]; s2 += t[2]; win++; }
+            if (sub >= 0) { const unsigned char *t = tmp + (size_t)sub*tstride + x*4; s0 -= t[0]; s1 -= t[1]; s2 -= t[2]; win--; }
+        }
+    }
+}
+
 /* damage tracking (deep-compositors §0.1: "sem damage voce redesenha a tela
  * inteira todo frame — inaceitavel no software"). DISPD_DAMAGE=0 desliga (volta
  * ao recompose-tela-cheia). So no backend GDI — o flip DXGI apresenta o buffer
@@ -519,6 +580,9 @@ static void blit_glass(HDC memdc, const void *sbits, int sw,
     if (!dst || !src) return;
     int dstride = g_srv.frame.stride, sstride = sw * 4;
     int a = glass_opacity(), ia = 255 - a;
+    /* frosted: borra o fundo (que ja tem wallpaper + janelas de baixo) antes de
+     * misturar o conteudo por cima -> a parte translucida (ia) mostra o borrado */
+    blur_bg(dst, dstride, x0, y0, x1, y1, blur_radius());
     for (int py = y0; py < y1; py++) {
         unsigned char *drow = dst + (size_t)py * dstride;
         const unsigned char *srow = src + (size_t)(py - dy) * sstride;
