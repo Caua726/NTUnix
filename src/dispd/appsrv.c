@@ -177,18 +177,35 @@ void appsrv_input_mouse(unsigned id, int x, int y, int buttons)
              app_send_to(c, b, 0, 0); }   /* #38: input real-time, zero-wait */
 }
 
+/* audit #39: mata o app por PID depois de um grace period, dando tempo pra ele
+ * salvar apos o APP-CLOSE-REQUEST. Por PID (nao toca na conexao) -> sem corrida
+ * com o worker; se o app ja saiu, o TerminateProcess num PID morto e' no-op. */
+static DWORD WINAPI grace_kill(LPVOID arg)
+{
+    DWORD pid = (DWORD)(UINT_PTR)arg;
+    Sleep(3000);
+    HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+    if (h) { TerminateProcess(h, 0); CloseHandle(h); }
+    return 0;
+}
+
 void appsrv_close_wid(unsigned id)
 {
     AppConn *c = conns_find(id);
     if (!c)
         return;
     app_send(c, "APP-CLOSE-REQUEST");   /* pedido cooperativo (app pode salvar) */
-    if (c->pid) {                        /* garante o fim do processo (#53) */
-        HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, c->pid);
-        if (h) { TerminateProcess(h, 0); CloseHandle(h); }
+    /* audit #39: NAO mata na hora — grace de 3s num thread; o app que sai antes
+     * fecha o pipe (worker sai no EOF), o que trava vira kill no fim do grace. */
+    if (c->pid) {
+        HANDLE t = CreateThread(NULL, 0, grace_kill, (LPVOID)(UINT_PTR)c->pid, 0, NULL);
+        if (t)
+            CloseHandle(t);
+        else {                           /* sem thread -> kill imediato (fallback) */
+            HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, c->pid);
+            if (h) { TerminateProcess(h, 0); CloseHandle(h); }
+        }
     }
-    if (c->pipe)
-        CancelIoEx(c->pipe, NULL);       /* desbloqueia a leitora -> worker sai */
 }
 
 /* ---- main thread: aplica os pedidos ---- */
