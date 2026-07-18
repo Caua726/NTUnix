@@ -825,6 +825,26 @@ static void compose_one_window(Window *w, const RECT *clip)
 
 /* recompoe uma regiao do quadro: wallpaper + janelas que cruzam `r` (em ordem z)
  * + barra, tudo clipado a `r`. Base do damage tracking. */
+/* deep-compositors #11 (occlusion): uma janela e' TOTALMENTE opaca (nao deixa ver
+ * o que esta atras) so se app (BitBlt opaco) ou glass 100%, SEM cantos
+ * arredondados (que cortam buracos) e SEM animacao de aparecer. Com os defaults
+ * modernos (glass translucido + cantos), quase nunca ocorre — mas e' correto p/
+ * o caso de um app opaco cobrindo outra janela. */
+static int win_opaque(Window *w)
+{
+    if (corner_radius() > 0 || w->anim_ms != 0)
+        return 0;
+    if (w->kind == WK_APP)
+        return 1;
+    return w->kind == WK_TERM && glass_opacity() >= 255;
+}
+
+static int rect_contains(const RECT *a, const RECT *b)
+{
+    return a->left <= b->left && a->top <= b->top &&
+           a->right >= b->right && a->bottom >= b->bottom;
+}
+
 static void compose_region(const RECT *r)
 {
     draw_wallpaper_rect(r->left, r->top, r->right, r->bottom);
@@ -834,9 +854,16 @@ static void compose_region(const RECT *r)
 
     Window *vis[256];
     int nv = collect_visible(vis, 256);
-    for (int i = 0; i < nv; i++)
-        if (rects_hit(&vis[i]->rect, r))
+    for (int i = 0; i < nv; i++) {
+        if (!rects_hit(&vis[i]->rect, r))
+            continue;
+        int occluded = 0;   /* pula se uma janela OPACA acima cobre esta inteira */
+        for (int j = i + 1; j < nv && !occluded; j++)
+            if (win_opaque(vis[j]) && rect_contains(&vis[j]->rect, &vis[i]->rect))
+                occluded = 1;
+        if (!occluded)
             compose_one_window(vis[i], r);
+    }
 
     RECT bar = { 0, 0, g_srv.scr_w, g_srv.bar_h };
     if (g_srv.bar_h > 0 && rects_hit(&bar, r))
