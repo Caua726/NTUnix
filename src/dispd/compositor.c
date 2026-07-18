@@ -589,6 +589,8 @@ static COLORREF border_color(Window *w)
 
 int compositor_animating(void)
 {
+    if (g_srv.toast_ms != 0)   /* #2: toast ativo -> mantem quadros ate expirar */
+        return 1;
     if (!anim_enabled())
         return 0;
     for (Window *w = g_srv.windows; w; w = w->next)
@@ -902,6 +904,36 @@ static void compose_region(const RECT *r)
     DeleteObject(rgn);
 }
 
+/* audit #2: toast — overlay transitorio no topo-centro (erro/feedback). Enquanto
+ * ativo, compositor_animating mantem o full-recompose, entao so desenho no caminho
+ * cheio. */
+#define TOAST_MS 3000
+static void draw_toast(void)
+{
+    if (!g_srv.toast[0] || g_srv.toast_ms == 0)
+        return;
+    if (GetTickCount64() - g_srv.toast_ms >= TOAST_MS) { g_srv.toast_ms = 0; return; }
+    HDC dc = g_srv.cdc;
+    HFONT of = (HFONT)SelectObject(dc, g_srv.font);
+    RECT tr = { 0, 0, 4000, 200 };
+    draw_text_utf8(dc, g_srv.toast, &tr, DT_CALCRECT | DT_SINGLELINE);
+    int tw = tr.right - tr.left, th = tr.bottom - tr.top;
+    int padx = 18, pady = 9, bw = tw + 2 * padx, bh = th + 2 * pady;
+    int bx = (g_srv.scr_w - bw) / 2, by = g_srv.bar_h + 14;
+    HBRUSH bg = CreateSolidBrush(RGB(28, 30, 42));
+    HPEN pen = CreatePen(PS_SOLID, 2, BORDER_FOCUS);
+    HBRUSH ob = (HBRUSH)SelectObject(dc, bg);
+    HPEN op = (HPEN)SelectObject(dc, pen);
+    RoundRect(dc, bx, by, bx + bw, by + bh, 12, 12);
+    SelectObject(dc, ob); SelectObject(dc, op);
+    DeleteObject(bg); DeleteObject(pen);
+    SetTextColor(dc, RGB(235, 235, 245));
+    SetBkMode(dc, TRANSPARENT);
+    RECT txt = { bx + padx, by + pady, bx + bw - padx, by + bh - pady };
+    draw_text_utf8(dc, g_srv.toast, &txt, DT_SINGLELINE | DT_LEFT | DT_VCENTER);
+    SelectObject(dc, of);
+}
+
 /* apresenta o quadro; sub != NULL -> so o sub-retangulo (damage) */
 static void present_frame(const RECT *sub)
 {
@@ -929,6 +961,7 @@ void compose_and_present(void)
     if (g_srv.dirty || !damage_enabled()) {
         RECT full = { 0, 0, g_srv.scr_w, g_srv.scr_h };
         compose_region(&full);
+        draw_toast();            /* #2: overlay de feedback por cima de tudo */
         present_frame(NULL);
         g_srv.dirty = 0;
         g_srv.bar_dirty = 0;

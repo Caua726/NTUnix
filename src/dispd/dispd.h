@@ -83,6 +83,9 @@ typedef struct Server {
     long      keys_seen;   /* diagnostico: teclas capturadas pelo hook */
     int       selftest;    /* DISPD_SELFTEST=1: so retangulos, sem term/ntwm */
     int       running;
+
+    char      toast[192];  /* #2: mensagem transitoria (erro/feedback) no canto */
+    ULONGLONG toast_ms;    /* inicio do toast (0 = nenhum) */
 } Server;
 
 extern Server g_srv;
@@ -146,6 +149,7 @@ Window  *spawn_terminal(const char *cmdline);  /* cria janela WK_TERM + 1a aba *
 Window  *win_create_foreign(HWND hwnd);        /* WK_FOREIGN (sem DIB) */
 void     dispd_close_window(Window *w);        /* fecha janela + conexao do app (#54) */
 void     dispd_log(const char *fmt, ...);
+void     dispd_toast(const char *fmt, ...);    /* #2: feedback visual transitorio */
 
 /* abas do terminal (dispd.c) — internas ao dispd; o WM nao sabe delas */
 int      win_tab_add(Window *w, const char *cmdline);  /* nova aba, vira ativa */

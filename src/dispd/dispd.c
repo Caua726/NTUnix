@@ -32,6 +32,20 @@ void dispd_log(const char *fmt, ...)
     }
 }
 
+/* audit #2: toast — mensagem transitoria no canto (erro/feedback). Tambem loga. */
+void dispd_toast(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(g_srv.toast, sizeof g_srv.toast, fmt, ap);
+    va_end(ap);
+    for (char *p = g_srv.toast; *p; p++)      /* ASCII-safe, sem controle */
+        if ((unsigned char)*p < 0x20) *p = ' ';
+    g_srv.toast_ms = GetTickCount64();
+    g_srv.dirty = 1;
+    dispd_log("toast: %s", g_srv.toast);
+}
+
 /* cmdline do shell padrao (tty): busybox ash, ou cmd.exe se DISPD_SHELL=cmd */
 static const char *resolve_shell(const char *cmdline, char *buf, size_t cap)
 {
@@ -58,6 +72,7 @@ Window *spawn_terminal(const char *cmdline)
     strncpy(w->title, "terminal", sizeof w->title - 1);
     if (win_tab_add(w, cmdline) != 0) {   /* 1a aba */
         dispd_log("spawn_terminal: term_create falhou");
+        dispd_toast("falha ao abrir terminal: %s", cmdline ? cmdline : "ash");  /* #2 */
         win_destroy(w);
         return NULL;
     }
