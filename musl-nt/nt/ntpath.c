@@ -181,12 +181,29 @@ nt_sc_t nt_path_at(int dirfd, const char *path, WCHAR *out, size_t cap)
         r = copy_wide(out, cap, converted);
         if (r < 0) return r;
     } else if (converted[0] == L'/' || converted[0] == L'\\') {
-        InitOnceExecuteOnce(&root_once, initialize_root, 0, 0);
-        prefix = nt_wcslen(nt_root);
-        if (prefix + suffix + 1 > cap) return -NT_ENAMETOOLONG;
-        nt_memcpy(out, nt_root, prefix * sizeof(WCHAR));
-        nt_memcpy(out + prefix, converted, (suffix + 1) * sizeof(WCHAR));
-        r = (nt_sc_t)(prefix + suffix);
+        /* /mnt/<letra>[/...] -> <LETRA>:\... (drives do Windows, estilo WSL).
+         * Ex.: /mnt/x/windows/system32 -> X:\windows\system32. Deixa o ash sair
+         * da raiz do NTUnix e alcançar X:\, C:\ etc. */
+        WCHAR d = (converted[1] == L'm' && converted[2] == L'n' &&
+                   converted[3] == L't' && converted[4] == L'/') ? converted[5] : 0;
+        if (((d >= L'a' && d <= L'z') || (d >= L'A' && d <= L'Z')) &&
+            (converted[6] == L'/' || converted[6] == 0)) {
+            WCHAR drive = (d >= L'a' && d <= L'z') ? (WCHAR)(d - 32) : d;
+            const WCHAR *rest = converted + 6;    /* aponta pro '/' ou terminador */
+            size_t rl = nt_wcslen(rest);
+            if (2 + (rl ? rl : 1) + 1 > cap) return -NT_ENAMETOOLONG;
+            out[0] = drive;
+            out[1] = L':';
+            if (!rl) { out[2] = L'\\'; out[3] = 0; r = 3; }
+            else { nt_memcpy(out + 2, rest, (rl + 1) * sizeof(WCHAR)); r = (nt_sc_t)(2 + rl); }
+        } else {
+            InitOnceExecuteOnce(&root_once, initialize_root, 0, 0);
+            prefix = nt_wcslen(nt_root);
+            if (prefix + suffix + 1 > cap) return -NT_ENAMETOOLONG;
+            nt_memcpy(out, nt_root, prefix * sizeof(WCHAR));
+            nt_memcpy(out + prefix, converted, (suffix + 1) * sizeof(WCHAR));
+            r = (nt_sc_t)(prefix + suffix);
+        }
     } else {
         r = base_for_dirfd(dirfd, out, cap);
         if (r < 0) return r;

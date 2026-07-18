@@ -40,27 +40,59 @@ static DWORD WINAPI reader_main(LPVOID arg)
     return 0;
 }
 
-/* bloco de env = env do dispd + NTU_PTY=1 + NTU_PTY_WS=<nome do mapping> */
+/* "X:\Windows\System32" -> "/mnt/x/Windows/System32" (drive estilo WSL) */
+static void win2unix(const char *w, char *out, size_t cap)
+{
+    if (!w[0] || w[1] != ':') { out[0] = 0; return; }
+    char drive = (w[0] >= 'A' && w[0] <= 'Z') ? (char)(w[0] + 32) : w[0];
+    int n = snprintf(out, cap, "/mnt/%c", drive);
+    for (const char *q = w + 2; *q && n < (int)cap - 1; q++)
+        out[n++] = (*q == '\\') ? '/' : *q;
+    out[n] = 0;
+}
+
+/* bloco de env pro filho = env do dispd (menos PATH) + NTU_PTY/NTU_PTY_WS +
+ * PATH unix-form (o ash divide em ':' e usa caminhos unix; a PATH do Windows
+ * — ';' e 'X:\' — e' inutilizavel por ele). Inclui o System32 via /mnt pra
+ * achar cmd/powershell/taskmgr direto do shell. */
 static char *build_env(const char *ws_name)
 {
     char *base = GetEnvironmentStringsA();
     if (!base)
         return NULL;
-    size_t k = 0;
-    while (!(base[k] == 0 && base[k + 1] == 0)) k++;
-    size_t keep = (base[0] == 0) ? 0 : k + 1;   /* "..varN\0" (sem o \0 final) */
+
+    char sysdir[MAX_PATH] = "", windir[MAX_PATH] = "", usys[MAX_PATH], uwin[MAX_PATH];
+    GetSystemDirectoryA(sysdir, sizeof sysdir);
+    GetWindowsDirectoryA(windir, sizeof windir);
+    win2unix(sysdir, usys, sizeof usys);
+    win2unix(windir, uwin, sizeof uwin);
+    char upath[MAX_PATH * 3];
+    snprintf(upath, sizeof upath, "PATH=/system/bin:%s:%s",
+             usys[0] ? usys : "/mnt/x/windows/system32",
+             uwin[0] ? uwin : "/mnt/x/windows");
 
     char extra2[96];
     int e2 = snprintf(extra2, sizeof extra2, "NTU_PTY_WS=%s", ws_name);
     if (e2 < 0) { FreeEnvironmentStringsA(base); return NULL; }
 
-    size_t total = keep + sizeof("NTU_PTY=1") + (size_t)e2 + 1 + 1;
+    size_t kept = 0;   /* soma das entradas mantidas (pula PATH=) */
+    for (char *e = base; *e; e += strlen(e) + 1)
+        if (_strnicmp(e, "PATH=", 5) != 0)
+            kept += strlen(e) + 1;
+
+    size_t total = kept + sizeof("NTU_PTY=1") + (size_t)e2 + 1 +
+                   strlen(upath) + 1 + 1;
     char *out = (char *)malloc(total);
     if (out) {
         size_t p = 0;
-        memcpy(out, base, keep);              p += keep;
+        for (char *e = base; *e; e += strlen(e) + 1) {
+            if (_strnicmp(e, "PATH=", 5) == 0) continue;
+            size_t l = strlen(e) + 1;
+            memcpy(out + p, e, l); p += l;
+        }
         memcpy(out + p, "NTU_PTY=1", sizeof("NTU_PTY=1")); p += sizeof("NTU_PTY=1");
         memcpy(out + p, extra2, (size_t)e2 + 1);           p += (size_t)e2 + 1;
+        memcpy(out + p, upath, strlen(upath) + 1);         p += strlen(upath) + 1;
         out[p] = 0;                            /* terminador duplo do bloco */
     }
     FreeEnvironmentStringsA(base);
