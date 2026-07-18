@@ -212,16 +212,28 @@ void pipe_server_run(void)
         if (!con)
             continue;
 
+        /* audit #74: espera o comando com DEADLINE (poll) — um cliente que
+         * conecta e fica MUDO nao pode travar o unico thread de controle do
+         * initd (senao todo ntctl, ate o shutdown, fica indisponivel). Cliente
+         * real manda na hora -> o primeiro peek ja acha, sem atraso. */
         char req[4096];
-        DWORD n = 0;
-        if (ReadFile(pipe, req, sizeof req - 1, &n, NULL) && n) {
+        DWORD n = 0, avail = 0, waited = 0;
+        while (!g_shutdown && waited < 3000) {
+            if (!PeekNamedPipe(pipe, NULL, 0, NULL, &avail, NULL))
+                break;                 /* pipe quebrado (cliente sumiu) */
+            if (avail > 0)
+                break;
+            Sleep(50);
+            waited += 50;
+        }
+        if (avail > 0 && ReadFile(pipe, req, sizeof req - 1, &n, NULL) && n) {
             req[n] = 0;
             ntu_trim(req);
             handle_cmd(req);
             DWORD w;
             WriteFile(pipe, g_resp, (DWORD)g_len, &w, NULL);
         }
-        FlushFileBuffers(pipe);
+        FlushFileBuffers(pipe);        /* #75 (cliente que nao le) = follow-up */
         DisconnectNamedPipe(pipe);
     }
     CloseHandle(pipe);
