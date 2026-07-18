@@ -92,10 +92,10 @@ static char *q_pop(LONG *gen)
 
 /* ---- escrita de eventos (main thread) ---- */
 
-static void wm_send(const char *line)
+/* escreve no pipe SEM checar g_connected — usado por respostas de handshake
+ * (ex.: erro de versao antes de conectar de fato — audit #54) */
+static void wm_write(const char *line)
 {
-    if (!InterlockedCompareExchange(&g_connected, 0, 0))
-        return;
     ResetEvent(g_wev);
     ZeroMemory(&g_wov, sizeof g_wov);
     g_wov.hEvent = g_wev;
@@ -116,6 +116,13 @@ static void wm_send(const char *line)
         InterlockedExchange(&g_connected, 0);
         InterlockedExchange(&g_need_reset, 1);
     }
+}
+
+/* eventos normais dispd->ntwm: so quando ha um WM conectado */
+static void wm_send(const char *line)
+{
+    if (InterlockedCompareExchange(&g_connected, 0, 0))
+        wm_write(line);
 }
 
 int wmproto_connected(void)
@@ -373,12 +380,12 @@ static void apply(char *line)
         int n = ntuwm_split(line, av, 4, -1);
         int ver = n >= 3 ? atoi(av[2]) : 0;
         if (ver != NTUWM_PROTO_VER) {               /* valida versao (#65) */
-            wm_send(EVT_ERR " versao-incompativel");
+            wm_write(EVT_ERR " versao-incompativel");   /* audit #54: ERR mesmo sem conectar */
             dispd_log("wmproto: HELLO com versao %d != %d — rejeitado", ver, NTUWM_PROTO_VER);
             return;
         }
         if (g_hello) {                              /* segundo HELLO e' erro (#68) */
-            wm_send(EVT_ERR " hello-duplicado");
+            wm_write(EVT_ERR " hello-duplicado");   /* audit #54 */
             return;
         }
         g_ngrabs = 0;
@@ -400,6 +407,11 @@ static void apply(char *line)
         return;
     }
     if (!strcmp(verb, CMD_FRAME_COMMIT)) {
+        if (!g_buffering) {                          /* audit #55: COMMIT sem BEGIN -> ignora
+                                                      * (nao publica um quadro que nunca abriu) */
+            dispd_log("wmproto: COMMIT sem BEGIN — ignorado");
+            return;
+        }
         frame_commit();                             /* swap atomico */
         g_buffering = 0;
         g_srv.in_frame = 0;
