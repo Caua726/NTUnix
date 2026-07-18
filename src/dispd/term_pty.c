@@ -128,7 +128,11 @@ static int pty_start(Terminal *t, const char *cmdline, int cols, int rows)
     sa.nLength = sizeof sa;
     sa.lpSecurityDescriptor = NULL;
     sa.bInheritHandle = TRUE;
-    if (!CreatePipe(&in_r, &c->in_w, &sa, 0))       /* in_r=filho(stdin) in_w=master */
+    /* audit #65: buffer grande no pipe de STDIN (master->filho) para o WriteFile
+     * sincrono de pty_input (rodado no MAIN thread ao teclar) so bloquear se o
+     * filho parar de ler o stdin E chegarem >64K de input — na pratica nunca no
+     * uso interativo. Fix completo (writer thread/queue) fica como follow-up. */
+    if (!CreatePipe(&in_r, &c->in_w, &sa, 65536))   /* in_r=filho(stdin) in_w=master */
         goto fail;
     if (!CreatePipe(&c->out_r, &out_w, &sa, 0))     /* out_r=master out_w=filho(stdout) */
         goto fail;
