@@ -206,7 +206,8 @@ static void handle_cmd(char *req)
 void pipe_server_run(void)
 {
     HANDLE pipe = CreateNamedPipeA(NTU_PIPE_INITD, PIPE_ACCESS_DUPLEX,
-                                   PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                                   PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
+                                   PIPE_REJECT_REMOTE_CLIENTS,   /* audit #117: sem clientes de rede */
                                    1, 65536, 65536, 0, NULL);
     if (pipe == INVALID_HANDLE_VALUE) {
         ilog("pipe: criacao falhou (%lu) — ja tem um initd rodando?", GetLastError());

@@ -373,7 +373,8 @@ static DWORD WINAPI accept_main(LPVOID arg)
         HANDLE pipe = CreateNamedPipeA(NTU_PIPE_DISPD_APP,
                                        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
                                        PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE |
-                                       PIPE_WAIT, PIPE_UNLIMITED_INSTANCES,
+                                       PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,  /* audit #118 */
+                                       PIPE_UNLIMITED_INSTANCES,
                                        65536, 65536, 0, NULL);
         if (pipe == INVALID_HANDLE_VALUE) { Sleep(500); continue; }
 

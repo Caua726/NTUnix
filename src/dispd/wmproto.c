@@ -573,7 +573,8 @@ void wmproto_start(void)
 
     g_pipe = CreateNamedPipeA(NTU_PIPE_DISPD,
                               PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-                              PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                              PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT |
+                              PIPE_REJECT_REMOTE_CLIENTS,   /* audit #116: sem clientes de rede */
                               1, 65536, 65536, 0, NULL);
     if (g_pipe == INVALID_HANDLE_VALUE) {
         dispd_log("wmproto: CreateNamedPipe falhou (%lu)", GetLastError());
