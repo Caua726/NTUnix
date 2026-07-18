@@ -270,6 +270,11 @@ void win_set_client_size(Window *w, int cw, int ch)
 
 void win_focus(Window *w)
 {
+    /* audit #7: nao aceita foco em janela invisivel ou de outro workspace — o WM
+     * pode mandar FOCUS de uma janela oculta ao remover a ultima do ws atual, e
+     * o teclado iria pra uma janela que o usuario nao ve. Foco nulo nesse caso. */
+    if (w && (!w->visible || w->ws != g_srv.cur_ws))
+        w = NULL;
     for (Window *o = g_srv.windows; o; o = o->next)
         o->focused = 0;
     if (w) {

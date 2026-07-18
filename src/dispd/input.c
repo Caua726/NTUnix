@@ -298,13 +298,24 @@ int input_hook_active(void)
     return g_hook != NULL;
 }
 
-/* ---- mouse (#8/#9): encaminha ao app ou terminal sob o cursor ---- */
+/* ---- mouse: encaminha ao app ou terminal sob o cursor ---- */
+
+static unsigned g_capture_wid;   /* audit #18: janela que capturou o mouse no down */
 
 void input_mouse(int sx, int sy, int button, int press, int motion)
 {
-    Window *w = win_at_point(sx, sy);
+    /* audit #18: entre o down e o ultimo release, TODOS os eventos vao pra mesma
+     * janela (senao um up que sai da janela A vira up em B, e A acha que o botao
+     * continua pressionado) */
+    Window *w = g_capture_wid ? win_find(g_capture_wid) : NULL;
     if (!w)
+        w = win_at_point(sx, sy);
+    if (!w) {
+        g_capture_wid = 0;
         return;
+    }
+    if (press && !motion && button < 64)   /* primeiro botao (nao roda) -> captura */
+        g_capture_wid = w->id;
 
     /* clique na barra de abas -> troca de aba */
     if (w->kind == WK_TERM && w->ntabs > 0 && button == 0 && press && !motion) {
@@ -348,6 +359,13 @@ void input_mouse(int sx, int sy, int button, int press, int motion)
             term_mouse(w->term, col, row, button, press, motion, kmods);
         }
     }
+
+    /* audit #18: solta a captura quando nenhum botao continua pressionado */
+    if (!press && !motion &&
+        !((GetKeyState(VK_LBUTTON) & 0x8000) ||
+          (GetKeyState(VK_RBUTTON) & 0x8000) ||
+          (GetKeyState(VK_MBUTTON) & 0x8000)))
+        g_capture_wid = 0;
 }
 
 static LRESULT CALLBACK ll_proc(int code, WPARAM wp, LPARAM lp)
