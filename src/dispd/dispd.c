@@ -312,6 +312,15 @@ static LRESULT CALLBACK root_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         input_mouse(mx, my, btn, 0, 1);   /* motion */
         return 0;
     }
+    case WM_DISPLAYCHANGE: {   /* audit #85: resolucao/monitor mudou */
+        int nw = LOWORD(lp), nh = HIWORD(lp);
+        if (nw < 1) nw = GetSystemMetrics(SM_CXSCREEN);
+        if (nh < 1) nh = GetSystemMetrics(SM_CYSCREEN);
+        SetWindowPos(h, NULL, 0, 0, nw, nh, SWP_NOZORDER | SWP_NOACTIVATE);
+        compositor_resize(nw, nh);   /* recria backbuffer + present */
+        wmproto_ev_output();         /* WM re-tila com a nova area */
+        return 0;
+    }
     case WM_CLOSE:
     case WM_DESTROY:
         g_srv.running = 0;

@@ -93,6 +93,7 @@ extern Server g_srv;
 
 /* compositor.c */
 int      compositor_init(void);   /* 0=ok, -1=backbuffer falhou (#95) */
+int      compositor_resize(int w, int h);   /* #85: recria backbuffer (WM_DISPLAYCHANGE) */
 Window  *win_create(WinKind kind, int cw, int ch);
 Window  *win_create_shared(int cw, int ch, HANDLE section); /* WK_APP: DIB sobre section */
 void     win_destroy(Window *w);
@@ -123,6 +124,7 @@ void     wmproto_ev_destroyed(unsigned id);
 void     wmproto_ev_title(Window *w);
 void     wmproto_ev_focused(Window *w);   /* foco mudou no dispd (ex.: mouse) */
 void     wmproto_ev_key(unsigned mods, unsigned vk);
+void     wmproto_ev_output(void);   /* #85: tela mudou -> WM re-tila */
 
 /* appsrv.c — fronteira apps<->dispd (surface compartilhada via section) */
 void     appsrv_start(void);   /* sobe o servidor multi-cliente (thread) */

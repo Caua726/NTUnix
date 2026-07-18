@@ -194,6 +194,16 @@ static void grab_del(unsigned mods, unsigned vk)
 
 /* ---- handshake / snapshot (main thread) ---- */
 
+/* audit #85: a tela mudou de tamanho -> reenvia OUTPUT + SYNC pro WM re-tilar */
+void wmproto_ev_output(void)
+{
+    char b[128];
+    snprintf(b, sizeof b, "%s 0 0 %d %d %d", EVT_OUTPUT, g_srv.bar_h,
+             g_srv.scr_w, g_srv.scr_h - g_srv.bar_h);
+    wm_send(b);
+    wm_send(EVT_SYNC);
+}
+
 static void send_snapshot(void)
 {
     char b[512];

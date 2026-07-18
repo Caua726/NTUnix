@@ -43,6 +43,35 @@ static void free_dib(HDC dc, HBITMAP bmp)
     if (bmp) DeleteObject(bmp);
 }
 
+/* audit #85: recria o backbuffer no novo tamanho de tela (WM_DISPLAYCHANGE).
+ * Cria o novo ANTES de soltar o antigo — se make_dib falhar, mantem o atual. */
+int compositor_resize(int w, int h)
+{
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    if (w == g_srv.scr_w && h == g_srv.scr_h)
+        return 0;
+    HDC ndc; HBITMAP ndib; void *nbits;
+    if (make_dib(w, h, &ndc, &ndib, &nbits) != 0) {
+        dispd_log("compositor: resize do backbuffer falhou (%dx%d) — mantem %dx%d",
+                  w, h, g_srv.scr_w, g_srv.scr_h);
+        return -1;
+    }
+    free_dib(g_srv.cdc, g_srv.cdib);
+    g_srv.cdc = ndc; g_srv.cdib = ndib; g_srv.cbits = nbits;
+    g_srv.scr_w = w; g_srv.scr_h = h;
+    g_srv.frame.memdc = ndc;
+    g_srv.frame.dib = ndib;
+    g_srv.frame.bgra = nbits;
+    g_srv.frame.w = w; g_srv.frame.h = h;
+    g_srv.frame.stride = w * 4;
+    if (g_srv.present && g_srv.present->resize)
+        g_srv.present->resize(g_srv.present, w, h);
+    g_srv.dirty = 1;
+    dispd_log("compositor: tela %dx%d", w, h);
+    return 0;
+}
+
 int compositor_init(void)
 {
     /* backbuffer composto do tamanho da tela — sem ele nao ha o que compor,
