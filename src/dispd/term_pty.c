@@ -16,6 +16,7 @@ typedef struct {
     HANDLE in_w;     /* master escreve teclas aqui (stdin do filho)  */
     HANDLE out_r;    /* master le o stream VT aqui (stdout do filho) */
     HANDLE hproc;
+    HANDLE hjob;     /* audit #64: Job Object -> mata a arvore do shell no close */
     HANDLE reader;
     HANDLE ws_map;                 /* file-mapping da winsize (compart. c/ o slave) */
     volatile unsigned short *ws;   /* view: [0]=cols [1]=rows */
@@ -169,7 +170,7 @@ static int pty_start(Terminal *t, const char *cmdline, int cols, int rows)
     HANDLE inherit_list[2] = { in_r, out_w };
     SIZE_T attr_sz = 0;
     LPPROC_THREAD_ATTRIBUTE_LIST attrs = NULL;
-    DWORD cflags = CREATE_NO_WINDOW;
+    DWORD cflags = CREATE_NO_WINDOW | CREATE_SUSPENDED;   /* #64: atribui ao job antes de rodar */
     InitializeProcThreadAttributeList(NULL, 1, 0, &attr_sz);
     if (attr_sz && (attrs = (LPPROC_THREAD_ATTRIBUTE_LIST)malloc(attr_sz)) &&
         InitializeProcThreadAttributeList(attrs, 1, 0, &attr_sz) &&
@@ -195,6 +196,21 @@ static int pty_start(Terminal *t, const char *cmdline, int cols, int rows)
     if (!ok)
         goto fail;
 
+    /* audit #64: cria o Job, atribui o filho e SO ENTAO resume -> o ash e seus
+     * descendentes ficam no job e morrem juntos ao fechar (KILL_ON_JOB_CLOSE). */
+    c->hjob = CreateJobObjectA(NULL, NULL);
+    if (c->hjob) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli;
+        ZeroMemory(&jeli, sizeof jeli);
+        jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(c->hjob, JobObjectExtendedLimitInformation, &jeli, sizeof jeli);
+        AssignProcessToJobObject(c->hjob, pi.hProcess);
+    }
+    if (ResumeThread(pi.hThread) == (DWORD)-1) {   /* CREATE_SUSPENDED -> resume */
+        CloseHandle(pi.hThread);
+        TerminateProcess(pi.hProcess, 1);
+        goto fail;
+    }
     CloseHandle(pi.hThread);
     c->hproc = pi.hProcess;
     t->pid = pi.dwProcessId;
@@ -218,6 +234,7 @@ fail:
     if (env)   free(env);
     if (c->in_w)   CloseHandle(c->in_w);
     if (c->out_r)  CloseHandle(c->out_r);
+    if (c->hjob)   { TerminateJobObject(c->hjob, 1); CloseHandle(c->hjob); }
     if (c->hproc)  { TerminateProcess(c->hproc, 1); CloseHandle(c->hproc); }
     if (c->ws)     UnmapViewOfFile((void *)c->ws);
     if (c->ws_map) CloseHandle(c->ws_map);
@@ -254,7 +271,9 @@ static void pty_close(Terminal *t)
     Pty *c = (Pty *)t->impl;
     if (!c)
         return;
-    if (c->hproc)
+    if (c->hjob)                          /* audit #64: mata a ARVORE (ash + descendentes) */
+        TerminateJobObject(c->hjob, 0);
+    else if (c->hproc)
         TerminateProcess(c->hproc, 0);   /* filho morre -> out_w fecha -> reader EOF */
     if (c->out_r) { CloseHandle(c->out_r); c->out_r = NULL; }
     if (c->reader) {
@@ -266,6 +285,7 @@ static void pty_close(Terminal *t)
     }
     if (c->in_w)   CloseHandle(c->in_w);
     if (c->hproc)  CloseHandle(c->hproc);
+    if (c->hjob)   CloseHandle(c->hjob);   /* audit #64 */
     if (c->ws)     UnmapViewOfFile((void *)c->ws);
     if (c->ws_map) CloseHandle(c->ws_map);
     if (c->in_lock_init) DeleteCriticalSection(&c->in_lock);
