@@ -204,6 +204,15 @@ void wmproto_ev_output(void)
     wm_send(EVT_SYNC);
 }
 
+/* audit #3: clique num workspace da barra -> pede ao WM pra trocar (ele e' dono
+ * da politica de layout; nao trocamos cur_ws unilateralmente). */
+void wmproto_ev_wsreq(int ws)
+{
+    char b[32];
+    snprintf(b, sizeof b, "%s %d", EVT_WSREQ, ws);
+    wm_send(b);
+}
+
 static void send_snapshot(void)
 {
     char b[512];

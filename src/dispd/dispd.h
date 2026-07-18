@@ -105,6 +105,7 @@ void     win_set_client_size(Window *w, int cw, int ch);
 void     win_focus(Window *w);
 void     compose_and_present(void);
 int      compositor_animating(void);   /* #35: ha janela animando -> manter frames */
+int      bar_ws_at(int x, int y);      /* #3: workspace clicado na barra (-1 = nenhum) */
 Window  *win_at_point(int x, int y);   /* topo visivel no ws atual */
 
 /* input.c — teclado: hook LL global (enfileira) + WM_KEYDOWN fallback */
@@ -128,6 +129,7 @@ void     wmproto_ev_title(Window *w);
 void     wmproto_ev_focused(Window *w);   /* foco mudou no dispd (ex.: mouse) */
 void     wmproto_ev_key(unsigned mods, unsigned vk);
 void     wmproto_ev_output(void);   /* #85: tela mudou -> WM re-tila */
+void     wmproto_ev_wsreq(int ws);  /* #3: usuario clicou um workspace na barra */
 
 /* appsrv.c — fronteira apps<->dispd (surface compartilhada via section) */
 void     appsrv_start(void);   /* sobe o servidor multi-cliente (thread) */

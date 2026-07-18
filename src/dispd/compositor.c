@@ -369,6 +369,19 @@ static void draw_text_utf8(HDC dc, const char *s, RECT *rc, UINT fmt)
 
 /* barra de status no topo: workspaces + titulo focado + relogio.
  * Desenhada pelo dispd (dono da fonte/GDI); estilo dwm drawbar. */
+/* #3: faixa x de cada workspace desenhada na barra (pra hit-test do clique) */
+static int g_ws_x0[10], g_ws_x1[10];
+
+int bar_ws_at(int x, int y)
+{
+    if (y < 0 || y >= g_srv.bar_h)
+        return -1;
+    for (int i = 0; i < 9; i++)
+        if (g_ws_x1[i] > g_ws_x0[i] && x >= g_ws_x0[i] && x < g_ws_x1[i])
+            return i;
+    return -1;
+}
+
 static void draw_bar(void)
 {
     if (g_srv.bar_h <= 0)
@@ -406,6 +419,7 @@ static void draw_bar(void)
             SetTextColor(dc, occ[i] ? RGB(210, 210, 220) : RGB(90, 90, 100));
         }
         TextOutA(dc, x, ty, lbl, n);
+        g_ws_x0[i] = x; g_ws_x1[i] = x + sz.cx;   /* #3: faixa clicavel */
         x += sz.cx;
     }
 

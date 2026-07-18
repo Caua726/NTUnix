@@ -326,6 +326,11 @@ void input_mouse(int sx, int sy, int button, int press, int motion)
     Window *w = g_capture_wid ? win_find(g_capture_wid) : NULL;
     if (!w)
         w = win_at_point(sx, sy);
+    /* audit #3: clique esquerdo num workspace da barra -> pede a troca ao WM */
+    if (!w && press && !motion && button == 0) {
+        int ws = bar_ws_at(sx, sy);
+        if (ws >= 0) { wmproto_ev_wsreq(ws); return; }
+    }
     if (!w) {
         g_capture_wid = 0;
         return;
