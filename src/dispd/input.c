@@ -185,16 +185,18 @@ static void route_key(unsigned mods, DWORD vk, DWORD scan, int down)
     if (!f->term || !down)                      /* terminal: so no keydown */
         return;
 
-    /* abas do terminal (Ctrl+Shift+T/W, Ctrl+Tab) — nao vao pro pty */
-    if ((mods & MOD_CTRL) && (mods & MOD_SHIFT) && vk == 'T') {
+    /* abas do terminal (Ctrl+Shift+T/W, Ctrl+Tab) — nao vao pro pty.
+     * audit #17: combinacao EXATA (mods ==), nao (mods &) — senao Alt+Ctrl+Shift+T
+     * tambem dispararia o atalho. */
+    if (mods == (MOD_CTRL | MOD_SHIFT) && vk == 'T') {
         win_tab_add(f, NULL);                   /* nova aba tty */
         return;
     }
-    if ((mods & MOD_CTRL) && (mods & MOD_SHIFT) && vk == 'W') {
+    if (mods == (MOD_CTRL | MOD_SHIFT) && vk == 'W') {
         win_tab_close(f, f->active_tab);        /* ultima aba -> fecha a janela */
         return;
     }
-    if ((mods & MOD_CTRL) && vk == VK_TAB) {
+    if ((mods == MOD_CTRL || mods == (MOD_CTRL | MOD_SHIFT)) && vk == VK_TAB) {
         if (f->ntabs > 1) {
             int d = (mods & MOD_SHIFT) ? -1 : 1;
             win_tab_switch(f, (f->active_tab + d + f->ntabs) % f->ntabs);
@@ -203,7 +205,7 @@ static void route_key(unsigned mods, DWORD vk, DWORD scan, int down)
     }
 
     /* scrollback: Shift+PgUp/PgDn rola o historico (nao vai pro pty) */
-    if ((mods & MOD_SHIFT) && (vk == VK_PRIOR || vk == VK_NEXT)) {
+    if (mods == MOD_SHIFT && (vk == VK_PRIOR || vk == VK_NEXT)) {
         int page = f->term->rows > 1 ? f->term->rows - 1 : 1;
         vt_scroll(f->term, vk == VK_PRIOR ? page : -page);
         return;
@@ -321,6 +323,8 @@ void input_mouse(int sx, int sy, int button, int press, int motion)
     int cx = sx - ix, cy = sy - iy;
     if (cx < 0) cx = 0;
     if (cy < 0) cy = 0;
+    if (w->cw > 0 && cx >= w->cw) cx = w->cw - 1;   /* audit #19: clampa no MAXIMO */
+    if (w->ch > 0 && cy >= w->ch) cy = w->ch - 1;   /* (nao so no minimo) da surface */
     if (w->kind == WK_APP) {
         int buttons = ((GetKeyState(VK_LBUTTON) & 0x8000) ? 1 : 0) |
                       ((GetKeyState(VK_RBUTTON) & 0x8000) ? 2 : 0) |
@@ -334,7 +338,11 @@ void input_mouse(int sx, int sy, int button, int press, int motion)
         if (button >= 64 && !w->term->on_alt) {   /* roda no shell -> scrollback */
             vt_scroll(w->term, button == 64 ? 3 : -3);
         } else {
-            term_mouse(w->term, col, row, button, press, motion);
+            unsigned kmods = 0;                    /* audit #21: mods do teclado */
+            if (GetKeyState(VK_SHIFT) & 0x8000)   kmods |= MOD_SHIFT;
+            if (GetKeyState(VK_CONTROL) & 0x8000) kmods |= MOD_CTRL;
+            if (GetKeyState(VK_MENU) & 0x8000)    kmods |= MOD_ALT;
+            term_mouse(w->term, col, row, button, press, motion, kmods);
         }
     }
 }

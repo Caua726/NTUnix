@@ -14,6 +14,7 @@
  */
 #include "term.h"
 #include "vterm.h"
+#include "../common/ntuwm.h"   /* MOD_* p/ o mapeamento de mods do mouse (#21) */
 
 #define DEF_FG  RGB(0xE5, 0xE5, 0xE5)
 #define DEF_BG  RGB(0x00, 0x00, 0x00)
@@ -269,21 +270,26 @@ void vt_feed(Terminal *t, const char *bytes, int n)
 
 /* encaminha mouse ao pty via libvterm (ele encoda conforme o modo do app; se o
  * app nao pediu rastreio, nao emite nada) */
-void term_mouse(Terminal *t, int col, int row, int button, int press, int motion)
+void term_mouse(Terminal *t, int col, int row, int button, int press, int motion, unsigned mods)
 {
     if (!t || !t->vt)
         return;
     char rbuf[sizeof t->reply];
     int rlen;
 
+    VTermModifier vmod = VTERM_MOD_NONE;       /* audit #21: propaga Shift/Ctrl/Alt */
+    if (mods & MOD_SHIFT) vmod |= VTERM_MOD_SHIFT;
+    if (mods & MOD_CTRL)  vmod |= VTERM_MOD_CTRL;
+    if (mods & MOD_ALT)   vmod |= VTERM_MOD_ALT;
+
     EnterCriticalSection(&t->lock);
     VTerm *vt = (VTerm *)t->vt;
     if (motion) {
-        vterm_mouse_move(vt, row, col, VTERM_MOD_NONE);
+        vterm_mouse_move(vt, row, col, vmod);
     } else if (button >= 64) {                 /* roda: libvterm botoes 4/5 */
-        vterm_mouse_button(vt, button == 64 ? 4 : 5, 1, VTERM_MOD_NONE);
+        vterm_mouse_button(vt, button == 64 ? 4 : 5, 1, vmod);
     } else {                                    /* 0/1/2 -> libvterm 1/2/3 */
-        vterm_mouse_button(vt, button + 1, press ? 1 : 0, VTERM_MOD_NONE);
+        vterm_mouse_button(vt, button + 1, press ? 1 : 0, vmod);
     }
     rlen = t->reply_len;
     if (rlen > 0) { memcpy(rbuf, t->reply, (size_t)rlen); t->reply_len = 0; }

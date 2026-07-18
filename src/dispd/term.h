@@ -91,8 +91,9 @@ Terminal *term_create(const char *cmdline, int cols, int rows, struct Window *wi
 void      term_destroy(Terminal *t);
 void      term_input(Terminal *t, const char *bytes, int n);
 void      term_resize(Terminal *t, int cols, int rows);
-/* encaminha um evento de mouse ao pty (via libvterm; no-op sem rastreio) */
-void      term_mouse(Terminal *t, int col, int row, int button, int press, int motion);
+/* encaminha um evento de mouse ao pty (via libvterm; no-op sem rastreio).
+ * mods = MOD_* (ntuwm.h) do teclado no momento — audit #21 */
+void      term_mouse(Terminal *t, int col, int row, int button, int press, int motion, unsigned mods);
 
 /* backends (retornam 0 em sucesso) */
 int  term_conpty_start(Terminal *t, const char *cmdline, int cols, int rows);
