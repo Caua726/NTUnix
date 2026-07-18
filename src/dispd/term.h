@@ -45,6 +45,7 @@ typedef struct Terminal {
     void  *vts;               /* VTermScreen*  (opaco aqui) */
     int    cur_x, cur_y;      /* cursor (via callback do libvterm / scrape) */
     int    cur_vis;
+    int    cur_shape;         /* #99: 0/1=bloco, 2=underline, 3=barra (DECSCUSR) */
 
     /* grade simples do fallback scrape (usada so quando vt == NULL) */
     Cell  *grid;

@@ -86,6 +86,9 @@ static int cb_settermprop(VTermProp prop, VTermValue *val, void *user)
         t->on_alt = val->boolean;   /* tela alt (vim/htop): sem scrollback */
         t->scroll_off = 0;
         t->dirty = 1;
+    } else if (prop == VTERM_PROP_CURSORSHAPE) {   /* audit #99: DECSCUSR */
+        t->cur_shape = val->number;   /* 1=bloco, 2=underline, 3=barra */
+        t->dirty = 1;
     }
     return 1;
 }
@@ -498,7 +501,11 @@ void vt_render(Terminal *t, HDC memdc, HFONT font, int cellw, int cellh)
      * alternancia = 1 recompose (sincronizado, sem amostragem defasada). */
     if (cvis && g_vt_cursor_on && !soff && cx < cols && cy < rows && cx >= 0 && cy >= 0) {
         RECT rc = { cx * cellw, cy * cellh, (cx + 1) * cellw, (cy + 1) * cellh };
-        InvertRect(memdc, &rc);
+        if (t->cur_shape == 2)          /* audit #99: underline */
+            rc.top = rc.bottom - 2;
+        else if (t->cur_shape == 3)     /* barra vertical */
+            rc.right = rc.left + 2;
+        InvertRect(memdc, &rc);         /* bloco (0/1) = celula inteira */
     }
 
     SelectObject(memdc, old);
