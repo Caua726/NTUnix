@@ -323,6 +323,16 @@ static void pump_title(Window *w)
     }
 }
 
+/* audit #89: titulos vem em UTF-8 (OSC do terminal / GetWindowText); DrawTextA os
+ * trata como ANSI -> mojibake em nao-ASCII. Converte pra UTF-16 e usa DrawTextW. */
+static void draw_text_utf8(HDC dc, const char *s, RECT *rc, UINT fmt)
+{
+    WCHAR w[512];
+    int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, w, 512);
+    if (n > 0)
+        DrawTextW(dc, w, n - 1, rc, fmt);   /* n inclui o NUL terminador */
+}
+
 /* barra de status no topo: workspaces + titulo focado + relogio.
  * Desenhada pelo dispd (dono da fonte/GDI); estilo dwm drawbar. */
 static void draw_bar(void)
@@ -386,8 +396,8 @@ static void draw_bar(void)
     if (g_srv.focused && g_srv.focused->title[0] && clock_x - x > 20) {
         SetTextColor(dc, RGB(200, 200, 210));
         RECT trc = { x, 0, clock_x - pad, g_srv.bar_h };
-        DrawTextA(dc, g_srv.focused->title, -1, &trc,
-                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        draw_text_utf8(dc, g_srv.focused->title, &trc,
+                       DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
 
     SetTextColor(dc, RGB(150, 150, 170));
@@ -515,9 +525,13 @@ static void blit_glass(HDC memdc, const void *sbits, int sw,
         for (int px = x0; px < x1; px++) {
             unsigned char *d = drow + px * 4;
             const unsigned char *s = srow + (px - dx) * 4;
-            d[0] = (unsigned char)((s[0] * a + d[0] * ia) >> 8);
-            d[1] = (unsigned char)((s[1] * a + d[1] * ia) >> 8);
-            d[2] = (unsigned char)((s[2] * a + d[2] * ia) >> 8);
+            /* audit #88: /255 arredondado (o >>8 = /256 escurecia levemente) */
+            unsigned b0 = s[0] * a + d[0] * ia;
+            unsigned b1 = s[1] * a + d[1] * ia;
+            unsigned b2 = s[2] * a + d[2] * ia;
+            d[0] = (unsigned char)((b0 + 1 + (b0 >> 8)) >> 8);
+            d[1] = (unsigned char)((b1 + 1 + (b1 >> 8)) >> 8);
+            d[2] = (unsigned char)((b2 + 1 + (b2 >> 8)) >> 8);
         }
     }
 }
@@ -574,8 +588,8 @@ static void compose_one_window(Window *w, const RECT *clip)
                     ? (w->focused ? RGB(12, 14, 20) : RGB(225, 225, 235))
                     : RGB(150, 150, 165));
                 RECT tr = { tx + 4, iy, tx + twid - 4, iy + g_srv.title_h };
-                DrawTextA(g_srv.cdc, lbl, -1, &tr,
-                          DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+                draw_text_utf8(g_srv.cdc, lbl, &tr,
+                               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
             }
         } else {
             RECT tb = { ix, iy, ix + iw, iy + g_srv.title_h };
@@ -587,8 +601,8 @@ static void compose_one_window(Window *w, const RECT *clip)
                                                : RGB(180, 180, 195));
             const char *base = w->title[0] ? w->title : "app";
             RECT tr = { ix + 6, iy, ix + iw - 6, iy + g_srv.title_h };
-            DrawTextA(g_srv.cdc, base, -1, &tr,
-                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            draw_text_utf8(g_srv.cdc, base, &tr,
+                           DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         }
     }
 
