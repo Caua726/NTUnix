@@ -20,6 +20,7 @@ typedef struct {
     HANDLE hjob;     /* audit #64: mata a arvore (cmd/powershell + filhos) no close */
     HANDLE reader;
     volatile LONG stop;
+    int    owns_console;   /* audit #102: 1 se NOS criamos o console (AllocConsole) */
 } Scrape;
 
 /* atributo do console -> indice ANSI 0..15 (Win usa R=4,G=2,B=1) */
@@ -113,9 +114,9 @@ static int scrape_start(Terminal *t, const char *cmdline, int cols, int rows)
     }
     t->impl = s;
 
-    if (!AllocConsole()) {
-        /* talvez ja tenhamos um console; segue tentando abrir CONOUT$ */
-    }
+    /* audit #102: registra se NOS criamos o console — so assim damos FreeConsole
+     * no fim (senao a falha do AllocConsole = ja havia console; nao e' nosso). */
+    s->owns_console = AllocConsole() ? 1 : 0;
     HWND cw = GetConsoleWindow();
     if (cw)
         ShowWindow(cw, SW_HIDE);
@@ -242,7 +243,8 @@ static void scrape_close(Terminal *t)
     if (s->conin && s->conin != INVALID_HANDLE_VALUE)   CloseHandle(s->conin);
     if (s->hproc) CloseHandle(s->hproc);
     if (s->hjob)  CloseHandle(s->hjob);   /* audit #64 */
-    FreeConsole();
+    if (s->owns_console)                   /* audit #102: so libera o que nos criamos */
+        FreeConsole();
     free(s);
     t->impl = NULL;
     InterlockedExchange(&g_console_used, 0);
