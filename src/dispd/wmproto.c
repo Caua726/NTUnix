@@ -58,8 +58,10 @@ static int g_hello;                    /* ja recebeu HELLO valido? (main thread)
 static int q_push(const char *s, LONG gen)
 {
     char *dup = _strdup(s);
-    if (!dup)
+    if (!dup) {
+        InterlockedExchange(&g_overflow, 1);   /* audit #57: OOM tambem pede RESYNC */
         return 0;
+    }
     EnterCriticalSection(&g_qlock);
     int nt = (g_qt + 1) % QCAP;
     if (nt == g_qh) {           /* cheia: NAO descarta silenciosamente (#71) */
