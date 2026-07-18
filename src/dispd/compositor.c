@@ -355,13 +355,79 @@ static void draw_bar(void)
     SelectObject(dc, of);
 }
 
+/* ---- glass: wallpaper com gradiente + composicao translucida ---- */
+
+/* opacidade do conteudo (0..255); DISPD_OPACITY em % (default 92) */
+static int glass_opacity(void)
+{
+    static int op = -1;
+    if (op < 0) {
+        char v[8] = "";
+        GetEnvironmentVariableA("DISPD_OPACITY", v, sizeof v);
+        int pct = 92;
+        if (v[0]) { pct = 0; for (char *c = v; *c >= '0' && *c <= '9'; c++) pct = pct * 10 + (*c - '0'); }
+        if (pct < 40) pct = 40;
+        if (pct > 100) pct = 100;
+        op = pct * 255 / 100;
+    }
+    return op;
+}
+
+/* gradiente vertical no backbuffer (escuro-azulado -> roxo-escuro) */
+static void draw_wallpaper(void)
+{
+    unsigned char *p = (unsigned char *)g_srv.cbits;
+    int W = g_srv.scr_w, H = g_srv.scr_h, stride = g_srv.frame.stride;
+    if (!p)
+        return;
+    for (int y = 0; y < H; y++) {
+        int tt = H > 1 ? (y * 255 / (H - 1)) : 0;
+        unsigned char r = (unsigned char)(20 + (40 - 20) * tt / 255);
+        unsigned char g = (unsigned char)(20 + (26 - 20) * tt / 255);
+        unsigned char b = (unsigned char)(30 + (56 - 30) * tt / 255);
+        unsigned char *row = p + (size_t)y * stride;
+        for (int x = 0; x < W; x++) {
+            row[x * 4 + 0] = b; row[x * 4 + 1] = g; row[x * 4 + 2] = r; row[x * 4 + 3] = 255;
+        }
+    }
+}
+
+/* blenda o DIB da janela sobre o backbuffer (glass translucido); com opacidade
+ * cheia cai no BitBlt opaco (rapido) */
+static void blit_glass(HDC memdc, const void *sbits, int sw,
+                       int dx, int dy, int bw, int bh)
+{
+    if (glass_opacity() >= 255) {
+        BitBlt(g_srv.cdc, dx, dy, bw, bh, memdc, 0, 0, SRCCOPY);
+        return;
+    }
+    GdiFlush();   /* garante que o ExtTextOut do vt_render chegou ao DIB */
+    unsigned char *dst = (unsigned char *)g_srv.cbits;
+    const unsigned char *src = (const unsigned char *)sbits;
+    if (!dst || !src) return;
+    int W = g_srv.scr_w, H = g_srv.scr_h, dstride = g_srv.frame.stride, sstride = sw * 4;
+    int a = glass_opacity(), ia = 255 - a;
+    for (int y = 0; y < bh; y++) {
+        int py = dy + y;
+        if (py < 0 || py >= H) continue;
+        unsigned char *drow = dst + (size_t)py * dstride;
+        const unsigned char *srow = src + (size_t)y * sstride;
+        for (int x = 0; x < bw; x++) {
+            int px = dx + x;
+            if (px < 0 || px >= W) continue;
+            unsigned char *d = drow + px * 4;
+            const unsigned char *s = srow + x * 4;
+            d[0] = (unsigned char)((s[0] * a + d[0] * ia) >> 8);
+            d[1] = (unsigned char)((s[1] * a + d[1] * ia) >> 8);
+            d[2] = (unsigned char)((s[2] * a + d[2] * ia) >> 8);
+        }
+    }
+}
+
 void compose_and_present(void)
 {
-    /* fundo */
-    RECT full = { 0, 0, g_srv.scr_w, g_srv.scr_h };
-    HBRUSH bg = CreateSolidBrush(DISP_BG);
-    FillRect(g_srv.cdc, &full, bg);
-    DeleteObject(bg);
+    /* fundo: gradiente (o glass do terminal deixa ele aparecer) */
+    draw_wallpaper();
 
     /* coleta visiveis do ws atual */
     Window *vis[256];
@@ -383,10 +449,19 @@ void compose_and_present(void)
         if (w->kind == WK_TERM && w->term && w->term->dirty)
             vt_render(w->term, w->memdc, g_srv.font, g_srv.cellw, g_srv.cellh);
 
-        /* borda: preenche o rect com a cor da borda (foco = destaque) */
+        /* borda: MOLDURA (nao preenche o miolo -> o wallpaper aparece sob o
+         * glass do terminal). foco = destaque */
         COLORREF bc = w->focused ? BORDER_FOCUS : w->border_rgb;
         HBRUSH bb = CreateSolidBrush(bc);
-        FillRect(g_srv.cdc, &w->rect, bb);
+        int bp = w->border_px;
+        RECT edges[4] = {
+            { w->rect.left, w->rect.top, w->rect.right, w->rect.top + bp },
+            { w->rect.left, w->rect.bottom - bp, w->rect.right, w->rect.bottom },
+            { w->rect.left, w->rect.top, w->rect.left + bp, w->rect.bottom },
+            { w->rect.right - bp, w->rect.top, w->rect.right, w->rect.bottom },
+        };
+        for (int e = 0; e < 4; e++)
+            FillRect(g_srv.cdc, &edges[e], bb);
         DeleteObject(bb);
 
         int ix = w->rect.left + w->border_px;
@@ -442,9 +517,12 @@ void compose_and_present(void)
         int ih = (w->rect.bottom - w->rect.top) - 2 * w->border_px - g_srv.title_h;
         int bw = w->cw < iw ? w->cw : iw;
         int bh = w->ch < ih ? w->ch : ih;
-        if (bw > 0 && bh > 0)
-            BitBlt(g_srv.cdc, ix, iy + g_srv.title_h, bw, bh,
-                   w->memdc, 0, 0, SRCCOPY);
+        if (bw > 0 && bh > 0) {
+            if (w->kind == WK_TERM)          /* glass: terminal translucido */
+                blit_glass(w->memdc, w->bits, w->cw, ix, iy + g_srv.title_h, bw, bh);
+            else                              /* app: superficie opaca */
+                BitBlt(g_srv.cdc, ix, iy + g_srv.title_h, bw, bh, w->memdc, 0, 0, SRCCOPY);
+        }
     }
 
     draw_bar();
