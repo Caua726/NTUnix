@@ -68,8 +68,19 @@ int wm_read(char *buf, int cap)
         if (ok)
             return total;                       /* mensagem completa */
         if (GetLastError() == ERROR_MORE_DATA) {
-            if (total >= cap - 1)
-                return total;                   /* buffer cheio: entrega o que cabe */
+            if (total >= cap - 1) {
+                /* audit #60: buffer cheio — DRENA o resto DESTA mensagem antes de
+                 * entregar, senao a cauda vira uma "mensagem" falsa no proximo
+                 * read. Trunca (perde o excedente) mas mantem o framing. */
+                char sink[512];
+                for (;;) {
+                    DWORD dn = 0;
+                    if (ReadFile(g_pipe, sink, sizeof sink, &dn, NULL) ||
+                        GetLastError() != ERROR_MORE_DATA)
+                        break;                  /* fim da mensagem (ou erro) */
+                }
+                return total;
+            }
             continue;                           /* le o resto da mensagem */
         }
         return total > 0 ? total : -1;
