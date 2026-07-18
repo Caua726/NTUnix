@@ -299,6 +299,54 @@ void term_mouse(Terminal *t, int col, int row, int button, int press, int motion
         t->be->input(t, rbuf, rlen);
 }
 
+/* audit #16: encoda tecla especial via libvterm (respeita DECCKM/application
+ * cursor, keypad mode, encoding de modificadores) em vez de sequencia fixa.
+ * Recebe o VK do Windows; 1 = tratou, 0 = nao e' tecla especial (cai no texto). */
+int vt_key(Terminal *t, int vk, unsigned mods)
+{
+    if (!t || !t->vt)
+        return 0;
+    VTermKey key = VTERM_KEY_NONE;
+    switch (vk) {
+    case VK_UP:     key = VTERM_KEY_UP;       break;
+    case VK_DOWN:   key = VTERM_KEY_DOWN;     break;
+    case VK_LEFT:   key = VTERM_KEY_LEFT;     break;
+    case VK_RIGHT:  key = VTERM_KEY_RIGHT;    break;
+    case VK_HOME:   key = VTERM_KEY_HOME;     break;
+    case VK_END:    key = VTERM_KEY_END;      break;
+    case VK_PRIOR:  key = VTERM_KEY_PAGEUP;   break;
+    case VK_NEXT:   key = VTERM_KEY_PAGEDOWN; break;
+    case VK_INSERT: key = VTERM_KEY_INS;      break;
+    case VK_DELETE: key = VTERM_KEY_DEL;      break;
+    case VK_RETURN: key = VTERM_KEY_ENTER;    break;
+    case VK_BACK:   key = VTERM_KEY_BACKSPACE; break;
+    case VK_ESCAPE: key = VTERM_KEY_ESCAPE;   break;
+    case VK_TAB:    key = VTERM_KEY_TAB;      break;
+    default:
+        if (vk >= VK_F1 && vk <= VK_F24)
+            key = (VTermKey)(VTERM_KEY_FUNCTION(1) + (vk - VK_F1));
+        break;
+    }
+    if (key == VTERM_KEY_NONE)
+        return 0;
+
+    VTermModifier vmod = VTERM_MOD_NONE;
+    if (mods & MOD_SHIFT) vmod |= VTERM_MOD_SHIFT;
+    if (mods & MOD_CTRL)  vmod |= VTERM_MOD_CTRL;
+    if (mods & MOD_ALT)   vmod |= VTERM_MOD_ALT;
+
+    char rbuf[sizeof t->reply];
+    int rlen;
+    EnterCriticalSection(&t->lock);
+    vterm_keyboard_key((VTerm *)t->vt, key, vmod);
+    rlen = t->reply_len;
+    if (rlen > 0) { memcpy(rbuf, t->reply, (size_t)rlen); t->reply_len = 0; }
+    LeaveCriticalSection(&t->lock);
+    if (rlen > 0 && t->be && t->be->input)
+        t->be->input(t, rbuf, rlen);
+    return 1;
+}
+
 /* ---- render ---- */
 
 static Cell *g_snap;

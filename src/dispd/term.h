@@ -94,6 +94,9 @@ void      term_resize(Terminal *t, int cols, int rows);
 /* encaminha um evento de mouse ao pty (via libvterm; no-op sem rastreio).
  * mods = MOD_* (ntuwm.h) do teclado no momento — audit #21 */
 void      term_mouse(Terminal *t, int col, int row, int button, int press, int motion, unsigned mods);
+/* tecla especial (seta/nav/funcao) via libvterm — respeita DECCKM etc. (#16).
+ * recebe o VK do Windows; retorna 1 se tratou, 0 se nao e' tecla especial. */
+int       vt_key(Terminal *t, int vk, unsigned mods);
 
 /* backends (retornam 0 em sucesso) */
 int  term_conpty_start(Terminal *t, const char *cmdline, int cols, int rows);

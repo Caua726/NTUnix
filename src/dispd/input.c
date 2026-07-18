@@ -221,8 +221,15 @@ static void route_key(unsigned mods, DWORD vk, DWORD scan, int down, unsigned wi
     }
     vt_scroll_reset(f->term);                    /* digitou -> volta pro fundo */
 
-    const char *seq = special_seq(vk, mods);    /* teclas especiais -> VT */
-    if (seq) { term_input(f->term, seq, (int)strlen(seq)); return; }
+    /* teclas especiais: no caminho libvterm, encoda via ele (respeita DECCKM/
+     * app-cursor — audit #16); no scrape (sem libvterm), sequencia fixa. */
+    if (f->term->vt) {
+        if (vt_key(f->term, (int)vk, mods))
+            return;
+    } else {
+        const char *seq = special_seq(vk, mods);
+        if (seq) { term_input(f->term, seq, (int)strlen(seq)); return; }
+    }
 
     if (r >= 1) {                               /* texto -> UTF-8 (#21) */
         char utf8[16];
