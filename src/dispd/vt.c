@@ -16,6 +16,9 @@
 #include "vterm.h"
 #include "../common/ntuwm.h"   /* MOD_* p/ o mapeamento de mods do mouse (#21) */
 
+int g_vt_cursor_on = 1;                        /* audit #115: fase do piscar do cursor */
+void vt_cursor_tick(void) { g_vt_cursor_on = !g_vt_cursor_on; }
+
 #define DEF_FG  RGB(0xE5, 0xE5, 0xE5)
 #define DEF_BG  RGB(0x00, 0x00, 0x00)
 
@@ -490,7 +493,10 @@ void vt_render(Terminal *t, HDC memdc, HFONT font, int cellw, int cellh)
         }
     }
 
-    if (cvis && !soff && cx < cols && cy < rows && cx >= 0 && cy >= 0) {
+    /* audit #115: cursor PISCA de verdade — g_vt_cursor_on e' alternado pelo frame
+     * loop (vt_cursor_tick), que tambem marca o terminal focado sujo. Assim cada
+     * alternancia = 1 recompose (sincronizado, sem amostragem defasada). */
+    if (cvis && g_vt_cursor_on && !soff && cx < cols && cy < rows && cx >= 0 && cy >= 0) {
         RECT rc = { cx * cellw, cy * cellh, (cx + 1) * cellw, (cy + 1) * cellh };
         InvertRect(memdc, &rc);
     }

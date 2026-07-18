@@ -251,8 +251,12 @@ static int frame_tick(void)   /* retorna 1 se apresentou um quadro */
      * um tick periodico cobre relogio e piscar do cursor. So terminais
      * VISIVEIS forcam repaint — um terminal oculto que gera saida nao (#13). */
     static unsigned tick;
-    if ((tick % 30) == 0)
+    if ((tick % 30) == 0) {
         g_srv.bar_dirty = 1;        /* relogio + titulo do focado (~2x/s) */
+        vt_cursor_tick();           /* audit #115: alterna a fase do cursor... */
+        if (g_srv.focused && g_srv.focused->term)
+            g_srv.focused->term->dirty = 1;   /* ...e recompoe o focado p/ piscar */
+    }
     if ((tick % 120) == 0)          /* #13: reinstala o hook periodicamente (~2s) */
         input_hook_refresh();
     tick++;

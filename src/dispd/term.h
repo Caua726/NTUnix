@@ -113,6 +113,8 @@ void vt_resize(Terminal *t, int cols, int rows);
 void vt_feed(Terminal *t, const char *bytes, int n);  /* pega o lock internamente */
 void vt_render(Terminal *t, HDC memdc, HFONT font, int cellw, int cellh);
 void vt_scroll(Terminal *t, int delta_lines);  /* +cima (historico) / -baixo */
+extern int g_vt_cursor_on;                     /* #115: fase do piscar do cursor */
+void vt_cursor_tick(void);                     /* alterna o piscar (chamado pelo frame loop) */
 void vt_scroll_reset(Terminal *t);             /* volta pro fundo (tempo real) */
 
 /* paleta ANSI 0..15 -> RGB (compartilhada com o scrape) */
