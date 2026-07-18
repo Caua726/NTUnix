@@ -236,6 +236,22 @@ nt_sc_t nt_path_to_unix(const WCHAR *path, char *out, size_t cap)
             out[0] = '/'; out[1] = 0;
             return 2;
         }
+    } else if (((path[0] >= L'A' && path[0] <= L'Z') ||
+                (path[0] >= L'a' && path[0] <= L'z')) && path[1] == L':') {
+        /* fora da raiz do NTUnix, mas com letra de drive -> /mnt/<letra>/...
+         * (inverso do forward mapping). Sem isso, sair da raiz via '..' deixa o
+         * getcwd retornar 'X:/...' e o PWD do ash dessincroniza -> ls/cd quebram. */
+        WCHAR d = path[0];
+        if (d >= L'A' && d <= L'Z') d += 32;
+        if (6 >= cap) return -NT_ERANGE;
+        out[0] = '/'; out[1] = 'm'; out[2] = 'n'; out[3] = 't';
+        out[4] = '/'; out[5] = (char)d;
+        r = nt_wide_to_utf8(path + 2, nt_wcslen(path + 2), out + 6, cap - 6, &n);
+        if (r < 0) return r;
+        n += 6;
+        for (i = 6; i < n; ++i) if (out[i] == '\\') out[i] = '/';
+        if (n < cap) out[n] = 0;
+        return (nt_sc_t)(n + 1);
     }
     r = nt_wide_to_utf8(start, nt_wcslen(start), out, cap, &n);
     if (r < 0) return r;
