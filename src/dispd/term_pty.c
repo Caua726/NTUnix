@@ -17,6 +17,7 @@ typedef struct {
     HANDLE out_r;    /* master le o stream VT aqui (stdout do filho) */
     HANDLE hproc;
     HANDLE hjob;     /* audit #64: Job Object -> mata a arvore do shell no close */
+    HANDLE winch_ev; /* audit #109: SetEvent no resize -> SIGWINCH no filho */
     HANDLE reader;
     HANDLE ws_map;                 /* file-mapping da winsize (compart. c/ o slave) */
     volatile unsigned short *ws;   /* view: [0]=cols [1]=rows */
@@ -56,7 +57,7 @@ static void win2unix(const char *w, char *out, size_t cap)
  * PATH unix-form (o ash divide em ':' e usa caminhos unix; a PATH do Windows
  * — ';' e 'X:\' — e' inutilizavel por ele). Inclui o System32 via /mnt pra
  * achar cmd/powershell/taskmgr direto do shell. */
-static char *build_env(const char *ws_name)
+static char *build_env(const char *ws_name, const char *winch_name)
 {
     char *base = GetEnvironmentStringsA();
     if (!base)
@@ -75,13 +76,16 @@ static char *build_env(const char *ws_name)
     char extra2[96];
     int e2 = snprintf(extra2, sizeof extra2, "NTU_PTY_WS=%s", ws_name);
     if (e2 < 0) { FreeEnvironmentStringsA(base); return NULL; }
+    char extra3[96];
+    int e3 = snprintf(extra3, sizeof extra3, "NTU_PTY_WINCH=%s", winch_name);
+    if (e3 < 0) { FreeEnvironmentStringsA(base); return NULL; }
 
     size_t kept = 0;   /* soma das entradas mantidas (pula PATH=) */
     for (char *e = base; *e; e += strlen(e) + 1)
         if (_strnicmp(e, "PATH=", 5) != 0)
             kept += strlen(e) + 1;
 
-    size_t total = kept + sizeof("NTU_PTY=1") + (size_t)e2 + 1 +
+    size_t total = kept + sizeof("NTU_PTY=1") + (size_t)e2 + 1 + (size_t)e3 + 1 +
                    strlen(upath) + 1 + 1;
     char *out = (char *)malloc(total);
     if (out) {
@@ -93,6 +97,7 @@ static char *build_env(const char *ws_name)
         }
         memcpy(out + p, "NTU_PTY=1", sizeof("NTU_PTY=1")); p += sizeof("NTU_PTY=1");
         memcpy(out + p, extra2, (size_t)e2 + 1);           p += (size_t)e2 + 1;
+        memcpy(out + p, extra3, (size_t)e3 + 1);           p += (size_t)e3 + 1;
         memcpy(out + p, upath, strlen(upath) + 1);         p += strlen(upath) + 1;
         out[p] = 0;                            /* terminador duplo do bloco */
     }
@@ -132,6 +137,13 @@ static int pty_start(Terminal *t, const char *cmdline, int cols, int rows)
     c->ws[0] = (unsigned short)(cols > 0 ? cols : 80);
     c->ws[1] = (unsigned short)(rows > 0 ? rows : 24);
 
+    /* audit #109: evento nomeado — o master faz SetEvent no resize e a musl-nt do
+     * filho posta SIGWINCH. auto-reset; falha = so nao ha SIGWINCH (nao fatal). */
+    char winchname[80];
+    snprintf(winchname, sizeof winchname, "ntunix-pty-winch-%lu-%08x",
+             GetCurrentProcessId(), salt);
+    c->winch_ev = CreateEventA(NULL, FALSE, FALSE, winchname);
+
     /* pipes: pontas do filho herdaveis; pontas do master nao */
     SECURITY_ATTRIBUTES sa;
     sa.nLength = sizeof sa;
@@ -148,7 +160,7 @@ static int pty_start(Terminal *t, const char *cmdline, int cols, int rows)
     SetHandleInformation(c->in_w, HANDLE_FLAG_INHERIT, 0);
     SetHandleInformation(c->out_r, HANDLE_FLAG_INHERIT, 0);
 
-    env = build_env(wsname);
+    env = build_env(wsname, winchname);
     if (!env)
         goto fail;
 
@@ -237,6 +249,7 @@ fail:
     if (c->hjob)   { TerminateJobObject(c->hjob, 1); CloseHandle(c->hjob); }
     if (c->hproc)  { TerminateProcess(c->hproc, 1); CloseHandle(c->hproc); }
     if (c->ws)     UnmapViewOfFile((void *)c->ws);
+    if (c->winch_ev) CloseHandle(c->winch_ev);   /* audit #109 */
     if (c->ws_map) CloseHandle(c->ws_map);
     if (c->in_lock_init) DeleteCriticalSection(&c->in_lock);
     free(c);
@@ -260,10 +273,11 @@ static void pty_resize(Terminal *t, int cols, int rows)
     Pty *c = (Pty *)t->impl;
     if (!c || !c->ws)
         return;
-    /* atualiza a winsize compartilhada; o ash pega no proximo TIOCGWINSZ (a cada
-     * prompt). SIGWINCH dinamico fica p/ depois (evita mexer no sys_signal.c). */
+    /* atualiza a winsize compartilhada; o ash pega no proximo TIOCGWINSZ */
     c->ws[0] = (unsigned short)(cols > 0 ? cols : 1);
     c->ws[1] = (unsigned short)(rows > 0 ? rows : 1);
+    if (c->winch_ev)
+        SetEvent(c->winch_ev);   /* audit #109: acorda o watcher -> SIGWINCH no filho */
 }
 
 static void pty_close(Terminal *t)
@@ -287,6 +301,7 @@ static void pty_close(Terminal *t)
     if (c->hproc)  CloseHandle(c->hproc);
     if (c->hjob)   CloseHandle(c->hjob);   /* audit #64 */
     if (c->ws)     UnmapViewOfFile((void *)c->ws);
+    if (c->winch_ev) CloseHandle(c->winch_ev);   /* audit #109 */
     if (c->ws_map) CloseHandle(c->ws_map);
     if (c->in_lock_init) DeleteCriticalSection(&c->in_lock);
     free(c);

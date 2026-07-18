@@ -57,6 +57,22 @@ static BOOL WINAPI console_ctrl_handler(DWORD type)
     return TRUE;
 }
 
+/* SIGWINCH cross-process: o dispd (master) faz SetEvent num evento nomeado a cada
+ * resize; esta thread espera nele e posta SIGWINCH local — exatamente como o
+ * console_ctrl_handler faz com SIGINT. Referencia: um PTY real sinaliza o
+ * foreground process group no TIOCSWINSZ. */
+static DWORD WINAPI winch_watcher(void *arg)
+{
+    HANDLE ev = (HANDLE)arg;
+    for (;;) {
+        if (WaitForSingleObject(ev, INFINITE) != WAIT_OBJECT_0)
+            break;
+        post_signal(NT_SIGWINCH);
+        if (g_main_thread) CancelSynchronousIo(g_main_thread);   /* acorda read bloqueado */
+    }
+    return 0;
+}
+
 void nt_install_signals(void)
 {
     HANDLE real = 0;
@@ -64,6 +80,15 @@ void nt_install_signals(void)
                     GetCurrentProcess(), &real, 0, FALSE, DUPLICATE_SAME_ACCESS);
     g_main_thread = real;
     SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
+
+    char wn[64];
+    if (GetEnvironmentVariableA("NTU_PTY_WINCH", wn, sizeof wn) > 0) {
+        HANDLE ev = OpenEventA(SYNCHRONIZE, FALSE, wn);
+        if (ev) {
+            HANDLE th = CreateThread(NULL, 0, winch_watcher, ev, 0, NULL);
+            if (th) CloseHandle(th); else CloseHandle(ev);
+        }
+    }
 }
 
 /* Entrega os sinais pendentes na THREAD ATUAL (chamado após cada syscall pelo
