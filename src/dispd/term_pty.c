@@ -110,18 +110,26 @@ static int pty_start(Terminal *t, const char *cmdline, int cols, int rows)
     HANDLE in_r = NULL, out_w = NULL;
     char *env = NULL;
 
-    /* winsize compartilhada com o slave (a musl-nt le no TIOCGWINSZ) */
-    char wsname[64];
-    snprintf(wsname, sizeof wsname, "ntunix-pty-ws-%lu-%ld",
-             GetCurrentProcessId(), (long)InterlockedIncrement(&g_pty_ctr));
+    /* winsize compartilhada com o slave (a musl-nt le no TIOCGWINSZ).
+     * audit #110: nome com sal (menos previsivel) + checa colisao + aborta se a
+     * view falhar (antes seguia com c->ws NULL e o slave recebia lixo/default). */
+    char wsname[80];
+    unsigned salt = (unsigned)GetTickCount() ^ (GetCurrentProcessId() << 8) ^
+                    ((unsigned)InterlockedIncrement(&g_pty_ctr) * 2654435761u);
+    snprintf(wsname, sizeof wsname, "ntunix-pty-ws-%lu-%08x",
+             GetCurrentProcessId(), salt);
     c->ws_map = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, 4, wsname);
     if (!c->ws_map)
         goto fail;
-    c->ws = (volatile unsigned short *)MapViewOfFile(c->ws_map, FILE_MAP_WRITE, 0, 0, 4);
-    if (c->ws) {
-        c->ws[0] = (unsigned short)(cols > 0 ? cols : 80);
-        c->ws[1] = (unsigned short)(rows > 0 ? rows : 24);
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {   /* nome ja existia -> colisao */
+        CloseHandle(c->ws_map); c->ws_map = NULL;
+        goto fail;
     }
+    c->ws = (volatile unsigned short *)MapViewOfFile(c->ws_map, FILE_MAP_WRITE, 0, 0, 4);
+    if (!c->ws)
+        goto fail;
+    c->ws[0] = (unsigned short)(cols > 0 ? cols : 80);
+    c->ws[1] = (unsigned short)(rows > 0 ? rows : 24);
 
     /* pipes: pontas do filho herdaveis; pontas do master nao */
     SECURITY_ATTRIBUTES sa;

@@ -59,8 +59,10 @@ void nt_pty_winsize(unsigned short *cols, unsigned short *rows)
         char name[64];
         if (GetEnvironmentVariableA("NTU_PTY_WS", name, sizeof name) > 0) {
             HANDLE m = OpenFileMappingA(FILE_MAP_READ, FALSE, name);
-            if (m)   /* a view sobrevive ao close; mantem pela vida do processo */
+            if (m) {
                 g_ws = (volatile unsigned short *)MapViewOfFile(m, FILE_MAP_READ, 0, 0, 4);
+                CloseHandle(m);   /* audit #112: a view sobrevive ao close do handle */
+            }
         }
     }
     unsigned short c = g_ws ? g_ws[0] : 0;
