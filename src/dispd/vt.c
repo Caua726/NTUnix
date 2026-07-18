@@ -192,6 +192,27 @@ void vt_free(Terminal *t)
     t->grid = NULL;
 }
 
+/* audit #66: solta SO a parte libvterm (mantem a grade scrape) — usado entre
+ * tentativas de backend: se o pty liga o libvterm e falha, o scrape seguinte NAO
+ * pode herdar t->vt (senao renderiza como libvterm e o mouse pega o caminho errado). */
+void vt_drop_libvterm(Terminal *t)
+{
+    if (t->vt) {
+        vterm_free((VTerm *)t->vt);
+        t->vt = NULL;
+        t->vts = NULL;
+    }
+    if (t->sb) {
+        for (int i = 0; i < t->sb_cap; i++)
+            free(t->sb[i].cells);
+        free(t->sb);
+        t->sb = NULL;
+    }
+    t->sb_cap = t->sb_count = t->sb_head = t->scroll_off = 0;
+    t->on_alt = 0;
+    t->backend_is_pty = 0;
+}
+
 void vt_scroll(Terminal *t, int delta_lines)
 {
     if (!t)

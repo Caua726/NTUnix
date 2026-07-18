@@ -86,6 +86,9 @@ Terminal *term_create(const char *cmdline, int cols, int rows, struct Window *wi
         t->be = chain[i];
         if (t->be->start(t, cmdline, cols, rows) == 0)
             return t;
+        /* audit #66: a tentativa pode ter ligado o libvterm antes de falhar —
+         * solta pra o proximo backend nao herdar (mantem a grade scrape) */
+        vt_drop_libvterm(t);
     }
     vt_free(t);
     DeleteCriticalSection(&t->lock);

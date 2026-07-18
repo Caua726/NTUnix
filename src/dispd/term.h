@@ -108,6 +108,7 @@ extern TerminalBackend term_pty_backend;    /* pty nativo (musl-nt), sem ConPTY 
 int  vt_init(Terminal *t, int cols, int rows);   /* 0=ok, -1=sem memoria */
 int  vt_use_libvterm(Terminal *t);               /* liga o libvterm (caminho ConPTY) */
 void vt_free(Terminal *t);
+void vt_drop_libvterm(Terminal *t);              /* #66: solta so o libvterm (mantem a grade) */
 void vt_resize(Terminal *t, int cols, int rows);
 void vt_feed(Terminal *t, const char *bytes, int n);  /* pega o lock internamente */
 void vt_render(Terminal *t, HDC memdc, HFONT font, int cellw, int cellh);
