@@ -28,6 +28,29 @@ static int demo_start(Terminal *t, const char *cmdline, int cols, int rows)
 }
 static TerminalBackend term_demo_backend = { "demo", demo_start, NULL, NULL, NULL };
 
+/* heuristica do hibrido: um app de console NATIVO do Windows (cmd, powershell,
+ * qualquer coisa em system32) so e' interativo num CONSOLE real -> scrape. Os
+ * nossos programas (busybox/musl-nt) usam o pty nativo. Case-insensitive. */
+static int cmdline_is_win_console(const char *cmd)
+{
+    if (!cmd)
+        return 0;
+    static const char *pats[] = {
+        "cmd.exe", "cmd ", "powershell", "pwsh", "\\windows\\system32", "/windows/system32"
+    };
+    char low[1024];
+    int i = 0;
+    for (; cmd[i] && i < (int)sizeof low - 1; i++)
+        low[i] = (char)((cmd[i] >= 'A' && cmd[i] <= 'Z') ? cmd[i] + 32 : cmd[i]);
+    low[i] = 0;
+    if (!_stricmp(cmd, "cmd") || !_stricmp(cmd, "cmd.exe"))
+        return 1;
+    for (size_t p = 0; p < sizeof pats / sizeof pats[0]; p++)
+        if (strstr(low, pats[p]))
+            return 1;
+    return 0;
+}
+
 Terminal *term_create(const char *cmdline, int cols, int rows, struct Window *win)
 {
     Terminal *t = (Terminal *)calloc(1, sizeof *t);
@@ -51,10 +74,13 @@ Terminal *term_create(const char *cmdline, int cols, int rows, struct Window *wi
     else if (!_stricmp(sel, "scrape")) chain[0] = &term_scrape_backend;
     else if (!_stricmp(sel, "conpty")) chain[0] = &term_conpty_backend;
     else if (!_stricmp(sel, "pty"))    chain[0] = &term_pty_backend;
-    /* default: pty nativo (musl-nt) — sem ConPTY, multi-terminal, stream VT limpo
-     * pro libvterm; scrape de fallback (1 terminal) se o pty falhar. DISPD_TERM
-     * forca um backend especifico (pty|scrape|conpty|demo). */
-    else { chain[0] = &term_pty_backend; chain[1] = &term_scrape_backend; }
+    /* HIBRIDO (default): app nativo do Windows -> console real (scrape); nossos
+     * programas Unix -> pty nativo (musl-nt). O outro fica de fallback.
+     * DISPD_TERM forca um backend especifico (pty|scrape|conpty|demo). */
+    else if (cmdline_is_win_console(cmdline))
+        { chain[0] = &term_scrape_backend; chain[1] = &term_conpty_backend; }
+    else
+        { chain[0] = &term_pty_backend; chain[1] = &term_scrape_backend; }
 
     for (int i = 0; i < 3 && chain[i]; i++) {
         t->be = chain[i];
