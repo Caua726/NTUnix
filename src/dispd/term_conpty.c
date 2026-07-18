@@ -40,6 +40,7 @@ typedef struct {
     HANDLE in_w;    /* host escreve teclas aqui   */
     HANDLE out_r;   /* host le o stream VT aqui    */
     HANDLE hproc;
+    HANDLE hjob;    /* audit #64: mata a arvore do shell no close */
     HANDLE reader;
     volatile LONG stop;
     CRITICAL_SECTION in_lock;   /* serializa escritas no in_w: o main manda teclas
@@ -130,13 +131,27 @@ static int conpty_start(Terminal *t, const char *cmdline, int cols, int rows)
     PROCESS_INFORMATION pi;
     ZeroMemory(&pi, sizeof pi);
     BOOL ok = CreateProcessA(NULL, cmd, NULL, NULL, FALSE,
-                             EXTENDED_STARTUPINFO_PRESENT, NULL, ntu_root(),
+                             EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED, NULL, ntu_root(),
                              &si.StartupInfo, &pi);
     DeleteProcThreadAttributeList(si.lpAttributeList);
     free(si.lpAttributeList);
     if (!ok)
         goto fail;
 
+    /* audit #64: Job com KILL_ON_JOB_CLOSE -> arvore do shell morre junto */
+    c->hjob = CreateJobObjectA(NULL, NULL);
+    if (c->hjob) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli;
+        ZeroMemory(&jeli, sizeof jeli);
+        jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(c->hjob, JobObjectExtendedLimitInformation, &jeli, sizeof jeli);
+        AssignProcessToJobObject(c->hjob, pi.hProcess);
+    }
+    if (ResumeThread(pi.hThread) == (DWORD)-1) {   /* CREATE_SUSPENDED -> resume */
+        CloseHandle(pi.hThread);
+        TerminateProcess(pi.hProcess, 1);
+        goto fail;
+    }
     CloseHandle(pi.hThread);
     c->hproc = pi.hProcess;
     t->pid = pi.dwProcessId;
@@ -159,6 +174,7 @@ fail:
     if (c->hpc)   p_Close(c->hpc);
     if (c->in_w)  CloseHandle(c->in_w);
     if (c->out_r) CloseHandle(c->out_r);
+    if (c->hjob)  { TerminateJobObject(c->hjob, 1); CloseHandle(c->hjob); }
     if (c->hproc) CloseHandle(c->hproc);
     if (c->in_lock_init) DeleteCriticalSection(&c->in_lock);
     free(c);
@@ -207,17 +223,20 @@ static void conpty_close(Terminal *t)
          * Terminal ja liberado (#87). Se travar (ex.: escrevendo resposta a
          * uma query no in_w cheio), destrava matando o filho e fechando in_w. */
         if (WaitForSingleObject(c->reader, 2000) != WAIT_OBJECT_0) {
-            if (c->hproc) TerminateProcess(c->hproc, 0);
+            if (c->hjob) TerminateJobObject(c->hjob, 0);   /* audit #64: mata a arvore */
+            else if (c->hproc) TerminateProcess(c->hproc, 0);
             if (c->in_w) { CloseHandle(c->in_w); c->in_w = NULL; }
-            WaitForSingleObject(c->reader, INFINITE);
+            WaitForSingleObject(c->reader, INFINITE);       /* join garantido: sem UAF */
         }
         CloseHandle(c->reader);
     }
     if (c->in_w)  CloseHandle(c->in_w);
+    if (c->hjob)  TerminateJobObject(c->hjob, 0);   /* audit #64: mata a arvore */
     if (c->hproc) {
         TerminateProcess(c->hproc, 0);   /* #93: garante o fim do filho */
         CloseHandle(c->hproc);
     }
+    if (c->hjob)  CloseHandle(c->hjob);   /* audit #64 */
     if (c->in_lock_init) DeleteCriticalSection(&c->in_lock);   /* apos o join */
     free(c);
     t->impl = NULL;

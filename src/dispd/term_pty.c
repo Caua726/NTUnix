@@ -277,19 +277,11 @@ static void pty_close(Terminal *t)
         TerminateProcess(c->hproc, 0);   /* filho morre -> out_w fecha -> reader EOF */
     if (c->out_r) { CloseHandle(c->out_r); c->out_r = NULL; }
     if (c->reader) {
-        DWORD wr = WaitForSingleObject(c->reader, 2000);
-        if (wr != WAIT_OBJECT_0) {
+        if (WaitForSingleObject(c->reader, 2000) != WAIT_OBJECT_0) {
             if (c->in_w) { CloseHandle(c->in_w); c->in_w = NULL; }  /* destrava reply */
-            /* audit #67: timeout final BOUNDED (nao INFINITE) — se a leitora ainda
-             * nao saiu apos destravar, desiste (vaza o handle) em vez de pendurar
-             * o main thread pra sempre */
-            wr = WaitForSingleObject(c->reader, 3000);
+            WaitForSingleObject(c->reader, INFINITE);               /* join garantido: sem UAF */
         }
-        if (wr == WAIT_OBJECT_0)
-            CloseHandle(c->reader);
-        else
-            dispd_log("pty: leitora nao encerrou em 5s — handle vazado (nao trava o main)");
-        c->reader = NULL;
+        CloseHandle(c->reader);
     }
     if (c->in_w)   CloseHandle(c->in_w);
     if (c->hproc)  CloseHandle(c->hproc);

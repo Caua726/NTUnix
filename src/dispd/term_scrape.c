@@ -17,6 +17,7 @@ typedef struct {
     HANDLE conout;   /* CONOUT$ */
     HANDLE conin;    /* CONIN$  */
     HANDLE hproc;
+    HANDLE hjob;     /* audit #64: mata a arvore (cmd/powershell + filhos) no close */
     HANDLE reader;
     volatile LONG stop;
 } Scrape;
@@ -141,9 +142,23 @@ static int scrape_start(Terminal *t, const char *cmdline, int cols, int rows)
     cmd[sizeof cmd - 1] = 0;
     PROCESS_INFORMATION pi;
     ZeroMemory(&pi, sizeof pi);
-    if (!CreateProcessA(NULL, cmd, NULL, NULL, TRUE, 0, NULL, ntu_root(),
+    if (!CreateProcessA(NULL, cmd, NULL, NULL, TRUE, CREATE_SUSPENDED, NULL, ntu_root(),
                         &si, &pi))
         goto fail;
+    /* audit #64: Job com KILL_ON_JOB_CLOSE -> a arvore morre junto ao fechar */
+    s->hjob = CreateJobObjectA(NULL, NULL);
+    if (s->hjob) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli;
+        ZeroMemory(&jeli, sizeof jeli);
+        jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(s->hjob, JobObjectExtendedLimitInformation, &jeli, sizeof jeli);
+        AssignProcessToJobObject(s->hjob, pi.hProcess);
+    }
+    if (ResumeThread(pi.hThread) == (DWORD)-1) {
+        CloseHandle(pi.hThread);
+        TerminateProcess(pi.hProcess, 1);
+        goto fail;
+    }
     CloseHandle(pi.hThread);
     s->hproc = pi.hProcess;
     t->pid = pi.dwProcessId;
@@ -159,6 +174,8 @@ static int scrape_start(Terminal *t, const char *cmdline, int cols, int rows)
 fail:
     if (s->conout && s->conout != INVALID_HANDLE_VALUE) CloseHandle(s->conout);
     if (s->conin && s->conin != INVALID_HANDLE_VALUE)   CloseHandle(s->conin);
+    if (s->hjob)  { TerminateJobObject(s->hjob, 1); CloseHandle(s->hjob); }
+    if (s->hproc) { TerminateProcess(s->hproc, 1); CloseHandle(s->hproc); }
     free(s);
     t->impl = NULL;
     InterlockedExchange(&g_console_used, 0);
@@ -211,15 +228,18 @@ static void scrape_close(Terminal *t)
     if (!s)
         return;
     InterlockedExchange(&s->stop, 1);
-    if (s->hproc)
+    if (s->hjob)                          /* audit #64: mata a arvore (cmd + filhos) */
+        TerminateJobObject(s->hjob, 0);
+    else if (s->hproc)
         TerminateProcess(s->hproc, 0);
     if (s->reader) {
-        WaitForSingleObject(s->reader, INFINITE);   /* join garantido: sem UAF (#88) */
+        WaitForSingleObject(s->reader, INFINITE);   /* join garantido (stop sinalizou): sem UAF */
         CloseHandle(s->reader);
     }
     if (s->conout && s->conout != INVALID_HANDLE_VALUE) CloseHandle(s->conout);
     if (s->conin && s->conin != INVALID_HANDLE_VALUE)   CloseHandle(s->conin);
     if (s->hproc) CloseHandle(s->hproc);
+    if (s->hjob)  CloseHandle(s->hjob);   /* audit #64 */
     FreeConsole();
     free(s);
     t->impl = NULL;
