@@ -294,29 +294,6 @@ void term_mouse(Terminal *t, int col, int row, int button, int press, int motion
 static Cell *g_snap;
 static size_t g_snap_cap;
 
-static unsigned char cp_to_oem(unsigned cp)
-{
-    if (cp == 0) return ' ';
-    if (cp >= 0x20 && cp < 0x7f) return (unsigned char)cp;
-    switch (cp) {
-    case 0x2500: return 0xC4; case 0x2502: return 0xB3;
-    case 0x250C: return 0xDA; case 0x2510: return 0xBF;
-    case 0x2514: return 0xC0; case 0x2518: return 0xD9;
-    case 0x251C: return 0xC3; case 0x2524: return 0xB4;
-    case 0x252C: return 0xC2; case 0x2534: return 0xC1;
-    case 0x253C: return 0xC5;
-    case 0x2591: return 0xB0; case 0x2592: return 0xB1;
-    case 0x2593: return 0xB2; case 0x2588: return 0xDB;
-    case 0x2580: return 0xDF; case 0x2584: return 0xDC;
-    case 0x25CF: return 0x07; case 0x2022: return 0x07;
-    case 0x2190: return 0x1B; case 0x2192: return 0x1A;
-    case 0x2191: return 0x18; case 0x2193: return 0x19;
-    case 0x00A0: return ' ';
-    }
-    if (cp < 0x100) return (unsigned char)cp;
-    return '?';
-}
-
 static COLORREF brighten(COLORREF c)
 {
     int r = GetRValue(c), g = GetGValue(c), b = GetBValue(c);
@@ -410,13 +387,18 @@ void vt_render(Terminal *t, HDC memdc, HFONT font, int cellw, int cellh)
             SetTextColor(memdc, fg);
             SetBkColor(memdc, bg);
 
-            char buf[256];
-            int bn = run < (int)sizeof buf ? run : (int)sizeof buf - 1;
-            for (int i = 0; i < bn; i++)
-                buf[i] = (char)cp_to_oem(g_snap[y * cols + x + i].ch);
+            WCHAR wbuf[256];
+            int dx[256];
+            int bn = run < 256 ? run : 255;
+            for (int i = 0; i < bn; i++) {
+                unsigned cp = g_snap[y * cols + x + i].ch;
+                wbuf[i] = (cp >= 0x20 && cp < 0x10000) ? (WCHAR)cp
+                        : (cp >= 0x10000 ? (WCHAR)0xFFFD : L' ');
+                dx[i] = cellw;   /* avanço fixo por célula (grade perfeita) */
+            }
             RECT rc = { x * cellw, y * cellh, (x + bn) * cellw, (y + 1) * cellh };
-            ExtTextOutA(memdc, x * cellw, y * cellh, ETO_OPAQUE | ETO_CLIPPED,
-                        &rc, buf, bn, NULL);
+            ExtTextOutW(memdc, x * cellw, y * cellh, ETO_OPAQUE | ETO_CLIPPED,
+                        &rc, wbuf, bn, dx);
             if (a0 & ATTR_UNDERLINE) {
                 HPEN pen = CreatePen(PS_SOLID, 1, fg);
                 HPEN op = (HPEN)SelectObject(memdc, pen);

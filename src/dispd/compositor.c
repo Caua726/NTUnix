@@ -60,11 +60,23 @@ int compositor_init(void)
     g_srv.frame.h = g_srv.scr_h;
     g_srv.frame.stride = g_srv.scr_w * 4;
 
-    /* fonte monoespacada garantida no WinPE; metricas com defaults se algo
-     * falhar (#96: nao le TEXTMETRIC nao inicializado) */
-    g_srv.font = (HFONT)GetStockObject(OEM_FIXED_FONT);
-    g_srv.cellw = 8;
-    g_srv.cellh = 16;
+    /* fonte: TTF monoespacada com antialiasing (nivel kitty/WT), nao a bitmap
+     * OEM dos anos 90. GDI substitui se a face faltar; OEM_FIXED_FONT de rede de
+     * seguranca. Consolas -> Cascadia -> Lucida Console conforme disponivel. */
+    {
+        static const char *faces[] = { "Cascadia Mono", "Consolas", "Lucida Console", "" };
+        for (int i = 0; faces[i][0]; i++) {
+            g_srv.font = CreateFontA(-18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                     DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                     CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, faces[i]);
+            if (g_srv.font)
+                break;
+        }
+    }
+    if (!g_srv.font)
+        g_srv.font = (HFONT)GetStockObject(OEM_FIXED_FONT);
+    g_srv.cellw = 9;
+    g_srv.cellh = 18;
     HDC dc = CreateCompatibleDC(NULL);
     if (dc) {
         TEXTMETRICA tm;
@@ -364,7 +376,7 @@ static int glass_opacity(void)
     if (op < 0) {
         char v[8] = "";
         GetEnvironmentVariableA("DISPD_OPACITY", v, sizeof v);
-        int pct = 92;
+        int pct = 85;
         if (v[0]) { pct = 0; for (char *c = v; *c >= '0' && *c <= '9'; c++) pct = pct * 10 + (*c - '0'); }
         if (pct < 40) pct = 40;
         if (pct > 100) pct = 100;
