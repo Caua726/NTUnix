@@ -21,7 +21,10 @@
 static struct { DWORD pid; HANDLE handle; } g_children[NT_MAX_CHILDREN];
 static SRWLOCK g_children_lock = SRWLOCK_INIT;
 
-static void child_add(DWORD pid, HANDLE h)
+/* audit #83: devolve 0 se a tabela estava cheia (o CALLER trata o handle:
+ * mata o filho e falha o spawn), em vez de fechar o handle e deixar um pid
+ * que o waitpid nunca poderia aguardar (ECHILD). */
+static int child_add(DWORD pid, HANDLE h)
 {
     int i;
     AcquireSRWLockExclusive(&g_children_lock);
@@ -32,7 +35,7 @@ static void child_add(DWORD pid, HANDLE h)
             break;
         }
     ReleaseSRWLockExclusive(&g_children_lock);
-    if (i == NT_MAX_CHILDREN) CloseHandle(h); /* tabela cheia: não guarda */
+    return i < NT_MAX_CHILDREN;
 }
 
 nt_sc_t nt_sys_exit(nt_sc_t code)
@@ -263,7 +266,15 @@ nt_sc_t nt_sys_spawn(nt_sc_t path_arg, nt_sc_t argv_arg, nt_sc_t envp_arg)
         return r;
     }
     CloseHandle(process.hThread);
-    child_add(process.dwProcessId, process.hProcess); /* pro wait4/kill */
+    if (!child_add(process.dwProcessId, process.hProcess)) { /* pro wait4/kill */
+        /* audit #83: sem slot, o pid nao seria aguardavel -> mata o filho e
+         * falha em vez de devolver um pid orfao */
+        TerminateProcess(process.hProcess, 1);
+        CloseHandle(process.hProcess);
+        VirtualFree(cmd, 0, MEM_RELEASE);
+        VirtualFree(environment, 0, MEM_RELEASE);
+        return -NT_EAGAIN;
+    }
     VirtualFree(cmd, 0, MEM_RELEASE);
     VirtualFree(environment, 0, MEM_RELEASE);
     return (nt_sc_t)process.dwProcessId; /* devolve o pid, NÃO sai */
@@ -487,6 +498,10 @@ nt_sc_t nt_sys_fork(void)
     }
     ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);
-    child_add(pi.dwProcessId, pi.hProcess); /* pro wait4/kill */
+    if (!child_add(pi.dwProcessId, pi.hProcess)) { /* pro wait4/kill */
+        TerminateProcess(pi.hProcess, 1);          /* audit #83: pid orfao */
+        CloseHandle(pi.hProcess);
+        return -NT_EAGAIN;
+    }
     return (nt_sc_t)pi.dwProcessId;
 }
