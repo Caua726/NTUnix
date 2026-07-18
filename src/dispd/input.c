@@ -361,8 +361,15 @@ void input_mouse(int sx, int sy, int button, int press, int motion)
         int buttons = ((GetKeyState(VK_LBUTTON) & 0x8000) ? 1 : 0) |
                       ((GetKeyState(VK_RBUTTON) & 0x8000) ? 2 : 0) |
                       ((GetKeyState(VK_MBUTTON) & 0x8000) ? 4 : 0);
-        if (motion && buttons == 0)
-            return;   /* nao inunda o app com hover puro (relaciona #61) */
+        if (motion && buttons == 0) {
+            /* audit #20: hover COALESCIDO (throttle ~50ms) em vez de descartado —
+             * habilita tooltips/estados hover sem inundar o app (#61) */
+            static ULONGLONG last_hover;
+            ULONGLONG now = GetTickCount64();
+            if (now - last_hover < 50)
+                return;
+            last_hover = now;
+        }
         appsrv_input_mouse(w->id, cx, cy, buttons);
     } else if (w->term) {
         int col = g_srv.cellw > 0 ? cx / g_srv.cellw : 0;
