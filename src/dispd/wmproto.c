@@ -482,6 +482,11 @@ void wmproto_drain(void)
         frame_clear();
         g_buffering = 0;
         g_srv.in_frame = 0;
+        /* audit #46: bump da geracao ANTES do RESYNC — os comandos ja enfileirados
+         * (o frame stale declarado contra o snapshot antigo) ficam com gen != cur
+         * e o drain os descarta; so os comandos POS-RESYNC (nova gen) sao aplicados.
+         * Reusa o mesmo mecanismo do #47/#66 em vez de um serial de protocolo. */
+        InterlockedIncrement(&g_gen);
         dispd_log("wmproto: fila estourou — pedindo RESYNC ao ntwm");
         wm_send(EVT_RESYNC);
     }
