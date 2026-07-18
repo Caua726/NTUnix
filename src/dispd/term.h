@@ -83,6 +83,7 @@ void      term_mouse(Terminal *t, int col, int row, int button, int press, int m
 int  term_conpty_start(Terminal *t, const char *cmdline, int cols, int rows);
 extern TerminalBackend term_conpty_backend;
 extern TerminalBackend term_scrape_backend;
+extern TerminalBackend term_pty_backend;    /* pty nativo (musl-nt), sem ConPTY */
 
 /* vt.c (glue com o libvterm + render) */
 int  vt_init(Terminal *t, int cols, int rows);   /* 0=ok, -1=sem memoria */

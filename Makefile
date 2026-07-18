@@ -17,6 +17,7 @@ HDRS   := src/common/ntu.h src/initd/initd.h
 # term_conpty.c e present_dxgi.c precisam de headers 0x0A00 -> TU isolada em out/obj.
 DISPD_SRC := src/dispd/dispd.c src/dispd/compositor.c src/dispd/present_gdi.c \
              src/dispd/vt.c src/dispd/term.c src/dispd/term_scrape.c \
+             src/dispd/term_pty.c \
              src/dispd/input.c src/dispd/wmproto.c src/dispd/appsrv.c
 DISPD_HDR := src/dispd/dispd.h src/dispd/present.h src/dispd/term.h \
              src/common/ntu.h src/common/ntuwm.h

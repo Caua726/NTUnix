@@ -50,10 +50,11 @@ Terminal *term_create(const char *cmdline, int cols, int rows, struct Window *wi
     if (!_stricmp(sel, "demo"))        chain[0] = &term_demo_backend;
     else if (!_stricmp(sel, "scrape")) chain[0] = &term_scrape_backend;
     else if (!_stricmp(sel, "conpty")) chain[0] = &term_conpty_backend;
-    /* default: scrape (console real) primeiro — funciona onde o ConPTY nao (VM/
-     * Wine); ConPTY fica de fallback (ex.: 2o terminal, ja que o scrape so
-     * suporta um console por processo). DISPD_TERM=conpty forca o ConPTY. */
-    else { chain[0] = &term_scrape_backend; chain[1] = &term_conpty_backend; }
+    else if (!_stricmp(sel, "pty"))    chain[0] = &term_pty_backend;
+    /* default: pty nativo (musl-nt) — sem ConPTY, multi-terminal, stream VT limpo
+     * pro libvterm; scrape de fallback (1 terminal) se o pty falhar. DISPD_TERM
+     * forca um backend especifico (pty|scrape|conpty|demo). */
+    else { chain[0] = &term_pty_backend; chain[1] = &term_scrape_backend; }
 
     for (int i = 0; i < 3 && chain[i]; i++) {
         t->be = chain[i];

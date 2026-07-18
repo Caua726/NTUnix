@@ -35,7 +35,8 @@ enum nt_fd_kind {
     NT_FD_DIR,
     NT_FD_PIPE,
     NT_FD_CONSOLE,
-    NT_FD_SOCKET
+    NT_FD_SOCKET,
+    NT_FD_PTY      /* pty slave: pipe p/ o master (dispd), mas e' um tty */
 };
 
 /* Dispositivos sintéticos de /dev que não têm handle NT equivalente. O slot
@@ -80,6 +81,10 @@ void nt_fd_make_inheritable(void);
 nt_sc_t nt_fd_dup(int oldfd, int minimum, int cloexec);
 nt_sc_t nt_fd_dup2(int oldfd, int newfd, int cloexec);
 void nt_fd_set_devkind(int fd, int devkind);
+
+/* sys_ioctl.c: o pty (slave) esta em modo OPOST|ONLCR? (\n de saida -> \r\n,
+ * como a disciplina de linha de um tty faria — senao o VT escadeia o texto) */
+int nt_pty_onlcr(void);
 
 /* ntpath.c */
 size_t nt_strlen(const char *s);

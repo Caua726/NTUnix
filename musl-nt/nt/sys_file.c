@@ -168,7 +168,8 @@ static nt_sc_t transfer_read(struct nt_fd *slot, void *buf, uint64_t count)
     /* Pipe não-bloqueante: CreatePipe só oferece I/O bloqueante, então emulamos
      * o O_NONBLOCK da leitura espiando antes. Sem dados e sem EOF => EAGAIN,
      * como no Linux; senão o ReadFile abaixo retorna o que já há sem bloquear. */
-    if (slot->kind == NT_FD_PIPE && (slot->flags & NT_O_NONBLOCK)) {
+    if ((slot->kind == NT_FD_PIPE || slot->kind == NT_FD_PTY) &&
+        (slot->flags & NT_O_NONBLOCK)) {
         DWORD avail = 0;
         if (PeekNamedPipe(slot->handle, 0, 0, 0, &avail, 0)) {
             if (!avail) return -NT_EAGAIN;
@@ -220,6 +221,32 @@ static nt_sc_t transfer_write(struct nt_fd *slot, const void *buf, uint64_t coun
             ReleaseSRWLockExclusive(&slot->io_lock);
             return r;
         }
+    }
+    if (slot->kind == NT_FD_PTY && nt_pty_onlcr()) {
+        /* disciplina de saida do tty: \n -> \r\n (senao o VT escadeia o texto) */
+        const unsigned char *b = buf;
+        DWORD i, start = 0, w;
+        for (i = 0; i < amount; i++) {
+            if (b[i] != '\n') continue;
+            if (i > start && !WriteFile(slot->handle, b + start, i - start, &w, 0)) {
+                nt_sc_t r = nt_last_error();
+                ReleaseSRWLockExclusive(&slot->io_lock);
+                return r;
+            }
+            if (!WriteFile(slot->handle, "\r\n", 2, &w, 0)) {
+                nt_sc_t r = nt_last_error();
+                ReleaseSRWLockExclusive(&slot->io_lock);
+                return r;
+            }
+            start = i + 1;
+        }
+        if (amount > start && !WriteFile(slot->handle, b + start, amount - start, &w, 0)) {
+            nt_sc_t r = nt_last_error();
+            ReleaseSRWLockExclusive(&slot->io_lock);
+            return r;
+        }
+        ReleaseSRWLockExclusive(&slot->io_lock);
+        return amount;   /* conta os bytes logicos, sem os \r injetados */
     }
     if (!WriteFile(slot->handle, buf, amount, &put, 0)) {
         nt_sc_t r = nt_last_error();
@@ -289,7 +316,8 @@ nt_sc_t nt_sys_lseek(nt_sc_t fd, nt_sc_t offset, nt_sc_t whence)
     LARGE_INTEGER in, out;
     DWORD method;
     if (!slot) return -NT_EBADF;
-    if (slot->kind == NT_FD_PIPE || slot->kind == NT_FD_CONSOLE)
+    if (slot->kind == NT_FD_PIPE || slot->kind == NT_FD_CONSOLE ||
+        slot->kind == NT_FD_PTY)
         return -NT_ESPIPE;
     switch (whence) {
     case NT_SEEK_SET: method = FILE_BEGIN; break;
