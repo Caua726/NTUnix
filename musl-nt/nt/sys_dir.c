@@ -27,6 +27,26 @@ static size_t align8(size_t value)
     return (value + 7U) & ~(size_t)7U;
 }
 
+/* DEBUG TEMPORARIO (bug do `ls`): loga "label=0xHEX" em X:\NTUnix\ls-debug.log.
+ * Remover depois de diagnosticar. */
+static void ls_dbg(const char *label, unsigned long long val)
+{
+    char buf[80];
+    int p = 0;
+    while (*label && p < 40) buf[p++] = *label++;
+    buf[p++] = '='; buf[p++] = '0'; buf[p++] = 'x';
+    for (int i = 60; i >= 0; i -= 4)
+        buf[p++] = "0123456789abcdef"[(val >> i) & 0xf];
+    buf[p++] = '\n';
+    HANDLE h = CreateFileW(L"X:\\NTUnix\\ls-debug.log", FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, 0, OPEN_ALWAYS, 0, 0);
+    if (h != INVALID_HANDLE_VALUE) {
+        DWORD w;
+        WriteFile(h, buf, (DWORD)p, &w, 0);
+        CloseHandle(h);
+    }
+}
+
 nt_sc_t nt_sys_getdents64(nt_sc_t fd, nt_sc_t buf_arg, nt_sc_t count_arg)
 {
     struct nt_fd *slot = nt_fd_get((int)fd);
@@ -34,7 +54,10 @@ nt_sc_t nt_sys_getdents64(nt_sc_t fd, nt_sc_t buf_arg, nt_sc_t count_arg)
     size_t cap, used = 0;
     unsigned char query_buffer[2048];
     IO_STATUS_BLOCK iosb;
-    if (!slot) return -NT_EBADF;
+    if (!slot) { ls_dbg("gd_nofd", (unsigned long long)fd); return -NT_EBADF; }
+    ls_dbg("gd_fd", (unsigned long long)fd);
+    ls_dbg("gd_kind", (unsigned long long)slot->kind);
+    ls_dbg("gd_count", (unsigned long long)count_arg);
     if (slot->kind != NT_FD_DIR) return -NT_ENOTDIR;
     if (!out && count_arg) return -NT_EFAULT;
     if (count_arg <= 0) return -NT_EINVAL;
@@ -44,6 +67,7 @@ nt_sc_t nt_sys_getdents64(nt_sc_t fd, nt_sc_t buf_arg, nt_sc_t count_arg)
     AcquireSRWLockExclusive(&slot->io_lock);
     if (slot->dir_eof) {
         ReleaseSRWLockExclusive(&slot->io_lock);
+        ls_dbg("gd_eof_early", 0);
         return 0;
     }
     for (;;) {
@@ -58,6 +82,8 @@ nt_sc_t nt_sys_getdents64(nt_sc_t fd, nt_sc_t buf_arg, nt_sc_t count_arg)
                                  query_buffer, sizeof query_buffer,
                                  FileIdBothDirectoryInformation, TRUE, 0,
                                  slot->dir_cookie == 0);
+        if (slot->dir_cookie < 3)
+            ls_dbg("gd_status", (unsigned long long)(unsigned long)status);
         if (status == NT_STATUS_NO_MORE_FILES) {
             slot->dir_eof = 1;
             break;
@@ -65,6 +91,8 @@ nt_sc_t nt_sys_getdents64(nt_sc_t fd, nt_sc_t buf_arg, nt_sc_t count_arg)
         if (status < 0) {
             nt_sc_t r = nt_error_from_status(status);
             ReleaseSRWLockExclusive(&slot->io_lock);
+            ls_dbg("gd_err_status", (unsigned long long)(unsigned long)status);
+            ls_dbg("gd_err_errno", (unsigned long long)(unsigned long long)(-r));
             return used ? (nt_sc_t)used : r;
         }
         info = (void *)query_buffer;
@@ -96,6 +124,7 @@ nt_sc_t nt_sys_getdents64(nt_sc_t fd, nt_sc_t buf_arg, nt_sc_t count_arg)
             break;
     }
     ReleaseSRWLockExclusive(&slot->io_lock);
+    ls_dbg("gd_used", (unsigned long long)used);
     return (nt_sc_t)used;
 }
 

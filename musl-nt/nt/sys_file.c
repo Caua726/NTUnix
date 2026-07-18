@@ -115,6 +115,21 @@ static int nt_dev_open(const char *path, int flags, nt_sc_t *result)
     return 1;
 }
 
+/* DEBUG TEMPORARIO (bug do `ls`) — remover depois. */
+static void open_dbg(const char *label, unsigned long long val)
+{
+    char buf[80];
+    int p = 0;
+    while (*label && p < 40) buf[p++] = *label++;
+    buf[p++] = '='; buf[p++] = '0'; buf[p++] = 'x';
+    for (int i = 60; i >= 0; i -= 4)
+        buf[p++] = "0123456789abcdef"[(val >> i) & 0xf];
+    buf[p++] = '\n';
+    HANDLE h = CreateFileW(L"X:\\NTUnix\\ls-debug.log", FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, 0, OPEN_ALWAYS, 0, 0);
+    if (h != INVALID_HANDLE_VALUE) { DWORD w; WriteFile(h, buf, (DWORD)p, &w, 0); CloseHandle(h); }
+}
+
 nt_sc_t nt_sys_openat(nt_sc_t dirfd, nt_sc_t path_arg, nt_sc_t flags_arg, nt_sc_t mode)
 {
     const char *path = (const char *)(uintptr_t)path_arg;
@@ -136,8 +151,15 @@ nt_sc_t nt_sys_openat(nt_sc_t dirfd, nt_sc_t path_arg, nt_sc_t flags_arg, nt_sc_
     h = CreateFileW(wide, access_from_flags(flags),
                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                     0, disposition_from_flags(flags), attrs, 0);
-    if (h == INVALID_HANDLE_VALUE) return nt_last_error();
+    if (h == INVALID_HANDLE_VALUE) {
+        if (flags & NT_O_DIRECTORY)
+            open_dbg("open_dir_FAIL_gle", (unsigned long long)GetLastError());
+        return nt_last_error();
+    }
     kind = kind_from_handle(h);
+    if (flags & NT_O_DIRECTORY) {          /* DEBUG: so quando `ls`/opendir */
+        open_dbg("open_dir_kind", (unsigned long long)kind);
+    }
     if ((flags & NT_O_DIRECTORY) && kind != NT_FD_DIR) {
         CloseHandle(h);
         return -NT_ENOTDIR;
