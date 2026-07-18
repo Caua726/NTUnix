@@ -502,5 +502,12 @@ int main(void)
         if (!(presented && dxgi))
             Sleep(16);   /* DXGI Present(1,0) ja pacea no vsync (#56) */
     }
+
+    /* audit #50/#90/#127: shutdown ordenado — para o servidor WM (junta a leitora)
+     * antes de sair; o exit do processo fecha os handles e os Jobs
+     * (KILL_ON_JOB_CLOSE, #64) matam os terminais/apps. */
+    if (!g_srv.selftest)
+        wmproto_stop();
+    dispd_log("dispd encerrando");
     return 0;
 }

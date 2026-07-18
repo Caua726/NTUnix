@@ -119,6 +119,7 @@ void     input_mouse(int x, int y, int button, int press, int motion);  /* #8/#9
 
 /* wmproto.c */
 void     wmproto_start(void);                 /* sobe o servidor de pipe (thread) */
+void     wmproto_stop(void);                   /* #50: teardown do servidor no shutdown */
 void     wmproto_drain(void);                 /* main thread: aplica comandos na fila */
 void     wmproto_abort_frame(void);           /* descarta um FRAME travado (#30) */
 int      wmproto_connected(void);

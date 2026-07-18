@@ -634,3 +634,23 @@ void wmproto_start(void)
     }
     dispd_log("wmproto: ouvindo em %s", NTU_PIPE_DISPD);
 }
+
+/* audit #50: teardown do servidor WM no shutdown — cancela a I/O da leitora,
+ * fecha o pipe e JUNTA a thread (com timeout). Antes so contava com o exit. */
+void wmproto_stop(void)
+{
+    HANDLE p = g_pipe;
+    if (p != INVALID_HANDLE_VALUE) {
+        g_pipe = INVALID_HANDLE_VALUE;
+        CancelIoEx(p, NULL);        /* desbloqueia o ReadFile overlapped da leitora */
+        DisconnectNamedPipe(p);
+        CloseHandle(p);
+    }
+    if (g_reader) {
+        if (WaitForSingleObject(g_reader, 2000) != WAIT_OBJECT_0)
+            dispd_log("wmproto: leitora nao encerrou em 2s no shutdown");
+        CloseHandle(g_reader);
+        g_reader = NULL;
+    }
+    dispd_log("wmproto: servidor encerrado");
+}
