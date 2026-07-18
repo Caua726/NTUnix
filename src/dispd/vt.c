@@ -168,6 +168,10 @@ int vt_use_libvterm(Terminal *t)
     vterm_set_utf8(vt, 1);
     vterm_output_set_callback(vt, out_cb, t);
     VTermScreen *vts = vterm_obtain_screen(vt);
+    if (!vts) {   /* audit #94: OOM interno do libvterm -> rollback completo */
+        vterm_free(vt);
+        return -1;
+    }
     vterm_screen_set_callbacks(vts, &g_screen_cbs, t);
     vterm_screen_enable_altscreen(vts, 1);
     vterm_screen_reset(vts, 1);   /* hard reset */

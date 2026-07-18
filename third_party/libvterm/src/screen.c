@@ -92,6 +92,8 @@ static inline ScreenCell *getcell(const VTermScreen *screen, int row, int col)
 static ScreenCell *alloc_buffer(VTermScreen *screen, int rows, int cols)
 {
   ScreenCell *new_buffer = vterm_allocator_malloc(screen->vt, sizeof(ScreenCell) * rows * cols);
+  if(!new_buffer)   /* audit #94: OOM -> devolve NULL em vez de desreferenciar */
+    return NULL;
 
   for(int row = 0; row < rows; row++) {
     for(int col = 0; col < cols; col++) {
@@ -527,6 +529,15 @@ static void resize_buffer(VTermScreen *screen, int bufidx, int new_rows, int new
   ScreenCell *new_buffer = vterm_allocator_malloc(screen->vt, sizeof(ScreenCell) * new_rows * new_cols);
   VTermLineInfo *new_lineinfo = vterm_allocator_malloc(screen->vt, sizeof(new_lineinfo[0]) * new_rows);
 
+  /* audit #95: OOM no resize NAO pode desreferenciar NULL nem trocar os buffers
+   * validos. Se qualquer alloc falhar, desfaz e mantem o tamanho atual (resize
+   * vira no-op) em vez de corromper/crashar. */
+  if(!new_buffer || !new_lineinfo) {
+    if(new_buffer)   vterm_allocator_free(screen->vt, new_buffer);
+    if(new_lineinfo) vterm_allocator_free(screen->vt, new_lineinfo);
+    return;
+  }
+
   int old_row = old_rows - 1;
   int new_row = new_rows - 1;
 
@@ -899,6 +910,15 @@ static VTermScreen *screen_new(VTerm *vt)
   screen->buffer = screen->buffers[BUFIDX_PRIMARY];
 
   screen->sb_buffer = vterm_allocator_malloc(screen->vt, sizeof(VTermScreenCell) * cols);
+
+  /* audit #94: OOM na criacao -> rollback. Nao devolve um screen com buffer NULL
+   * (crasharia no 1o uso). O state pertence ao vt; nao o liberamos aqui. */
+  if(!screen->buffers[BUFIDX_PRIMARY] || !screen->sb_buffer) {
+    if(screen->buffers[BUFIDX_PRIMARY]) vterm_allocator_free(vt, screen->buffers[BUFIDX_PRIMARY]);
+    if(screen->sb_buffer)               vterm_allocator_free(vt, screen->sb_buffer);
+    vterm_allocator_free(vt, screen);
+    return NULL;
+  }
 
   vterm_state_set_callbacks(screen->state, &state_cbs, screen);
   vterm_state_callbacks_has_premove(screen->state);
