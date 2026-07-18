@@ -57,7 +57,13 @@ typedef struct Terminal {
     int    scroll_off;        /* linhas roladas p/ cima (0 = fundo/tempo real) */
     int    on_alt;            /* tela alternativa (vim/htop): sem scrollback */
 
-    volatile int  dirty;      /* conteudo mudou desde o ultimo render */
+    /* audit #69: modelo de sincronizacao EXPLICITO (nao e' mistura acidental):
+     *  - dirty: escrito/limpo SEMPRE sob `lock` (reader/render); lido racy pelo
+     *    main no need-check — benigno (no pior caso perde 1 frame e auto-corrige,
+     *    pois o proximo byte re-seta). Em x86-64 (unico alvo) o int alinhado e'
+     *    atomico, entao o read solto nao rasga.
+     *  - alive/rx: contadores LOCK-FREE cross-thread -> Interlocked (sem lock). */
+    volatile long dirty;      /* conteudo mudou desde o ultimo render (sob lock) */
     volatile long alive;      /* filho ainda vivo (Interlocked) */
     volatile long rx;         /* diagnostico: bytes vindos do filho (Interlocked) */
     DWORD  pid;               /* PID do processo filho */
