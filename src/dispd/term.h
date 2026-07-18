@@ -69,7 +69,10 @@ typedef struct Terminal {
 
     /* saida do libvterm de volta ao pty (DSR/DA/mouse): montada no callback
      * sob o lock, enviada depois de liberar */
-    char   reply[512];
+    /* audit #96: era 512 e descartava fragmentos inteiros no overflow (app
+     * podia travar esperando resposta). 8K cobre um chunk cheio de queries;
+     * fila 100% dinamica fica como follow-up. */
+    char   reply[8192];
     int    reply_len;
 
     HANDLE reader;            /* thread leitora do stream de saida */

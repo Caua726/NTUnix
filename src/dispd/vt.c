@@ -223,19 +223,23 @@ void vt_resize(Terminal *t, int cols, int rows)
     if (t->vt) {
         vterm_set_size((VTerm *)t->vt, rows, cols);
     } else {
+        /* audit #93 (critico): so publica cols/rows novos se a grade nova
+         * alocou. Antes, calloc falho deixava a grade ANTIGA (menor) com
+         * cols/rows NOVOS (maiores) -> OOB no reader/render. Em OOM, mantem
+         * dimensoes e grade antigas (coerentes). */
         Cell *ng = (Cell *)calloc((size_t)cols * rows, sizeof(Cell));
-        if (ng) {
-            for (int i = 0; i < cols * rows; i++) {
-                ng[i].ch = ' '; ng[i].fg = DEF_FG; ng[i].bg = DEF_BG;
-            }
-            int cx = t->cols < cols ? t->cols : cols;
-            int cy = t->rows < rows ? t->rows : rows;
-            for (int y = 0; y < cy; y++)
-                for (int x = 0; x < cx; x++)
-                    ng[y * cols + x] = t->grid[y * t->cols + x];
-            free(t->grid);
-            t->grid = ng;
+        if (!ng)
+            return;
+        for (int i = 0; i < cols * rows; i++) {
+            ng[i].ch = ' '; ng[i].fg = DEF_FG; ng[i].bg = DEF_BG;
         }
+        int cx = t->cols < cols ? t->cols : cols;
+        int cy = t->rows < rows ? t->rows : rows;
+        for (int y = 0; y < cy; y++)
+            for (int x = 0; x < cx; x++)
+                ng[y * cols + x] = t->grid[y * t->cols + x];
+        free(t->grid);
+        t->grid = ng;
     }
     t->cols = cols;
     t->rows = rows;
