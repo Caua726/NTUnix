@@ -366,7 +366,7 @@ static int nt_fork_copy_memory(HANDLE child, HMODULE exe, void *rsp)
 {
     MEMORY_BASIC_INFORMATION mbi;
     unsigned char *addr = 0;
-    int n = 0, fail = 0;
+    int n = 0, copyfail = 0;   /* copyfail = escrita de regiao NOSSA falhou (#79) */
     void *teb = (void *)NtCurrentTeb();
     void *peb = (void *)__readgsqword(0x60); /* TEB->ProcessEnvironmentBlock */
     while (VirtualQuery(addr, &mbi, sizeof mbi)) {
@@ -388,10 +388,16 @@ static int nt_fork_copy_memory(HANDLE child, HMODULE exe, void *rsp)
                 DWORD old;
                 if (VirtualAllocEx(child, b, mbi.RegionSize,
                                    MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)) {
-                    /* VA livre no filho: cópia limpa */
-                    WriteProcessMemory(child, b, b, mbi.RegionSize, &wrote);
-                    VirtualProtectEx(child, b, mbi.RegionSize, base, &old);
-                    ++n;
+                    /* VA livre no filho: cópia limpa. audit #79: checa a escrita
+                     * — antes contava ++n mesmo com WriteProcessMemory falho,
+                     * deixando a regiao alocada mas com lixo no filho. */
+                    if (WriteProcessMemory(child, b, b, mbi.RegionSize, &wrote) &&
+                        wrote == mbi.RegionSize) {
+                        VirtualProtectEx(child, b, mbi.RegionSize, base, &old);
+                        ++n;
+                    } else {
+                        ++copyfail;
+                    }
                 } else if (is_exe || has_rsp) {
                     /* colisão SEGURA (stack / .data do exe): sobrescreve. A
                      * stack do pai pode ter MAIS páginas committadas que a do
@@ -399,22 +405,22 @@ static int nt_fork_copy_memory(HANDLE child, HMODULE exe, void *rsp)
                     VirtualAllocEx(child, b, mbi.RegionSize, MEM_COMMIT,
                                    PAGE_READWRITE);
                     VirtualProtectEx(child, b, mbi.RegionSize, PAGE_READWRITE, &old);
-                    if (WriteProcessMemory(child, b, b, mbi.RegionSize, &wrote))
+                    if (WriteProcessMemory(child, b, b, mbi.RegionSize, &wrote) &&
+                        wrote == mbi.RegionSize)
                         ++n;
                     else
-                        ++fail;
+                        ++copyfail;   /* #79: copia de regiao NOSSA falhou */
                     VirtualProtectEx(child, b, mbi.RegionSize, base, &old);
                 } else {
-                    /* colisão NÃO-segura (heap/loader do filho): não copia (com
-                     * a arena de VA fixa isto não contém memória nossa). */
-                    ++fail;
+                    /* colisão NÃO-segura (heap/loader do filho): esperado com a
+                     * arena de VA fixa (nao contem memoria nossa) -> nao e' erro */
                 }
             }
         }
         addr = (unsigned char *)mbi.BaseAddress + mbi.RegionSize;
         if (mbi.RegionSize == 0) break;
     }
-    return (fail << 16) | (n & 0xffff);
+    return (copyfail << 16) | (n & 0xffff);
 }
 
 nt_sc_t nt_sys_fork(void)
@@ -487,7 +493,15 @@ nt_sc_t nt_sys_fork(void)
      * do pai — seguro pois está parado e vai ser redirecionado), transplanta o
      * contexto do ponto do fork() e resume. */
     SuspendThread(pi.hThread);
-    nt_fork_copy_memory(pi.hProcess, exe, (void *)(uintptr_t)ctx.Rsp);
+    /* audit #79: se alguma regiao NOSSA nao copiou, o filho retomaria com
+     * memoria parcial (crash/corrupcao) — aborta em vez de resumir. Colisoes
+     * benignas (heap/loader do filho) nao contam como falha. */
+    if ((nt_fork_copy_memory(pi.hProcess, exe, (void *)(uintptr_t)ctx.Rsp) >> 16) != 0) {
+        TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return -NT_ENOMEM;
+    }
     ctx.ContextFlags = CONTEXT_FULL;
     if (!SetThreadContext(pi.hThread, &ctx)) {
         nt_sc_t r = nt_last_error();
