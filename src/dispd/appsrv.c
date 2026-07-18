@@ -30,6 +30,7 @@ typedef struct AppConn {
     CRITICAL_SECTION wlock;   /* serializa escritas do main/worker */
     volatile LONG dead;
     volatile LONG created;    /* 0=pendente, 1=ok, -1=falhou */
+    volatile LONG commit;     /* audit #32: flag de commit pendente (nao dropa como a fila) */
     struct AppConn *next;
 } AppConn;
 
@@ -232,9 +233,6 @@ void appsrv_drain(void)
                 InterlockedExchange(&it.conn->created, -1);
             }
             SetEvent(it.conn->ready);   /* libera o worker p/ APP-SURFACE/ERR (#46) */
-        } else if (it.type == AQ_COMMIT) {
-            Window *w = win_find((unsigned)it.conn->wid);
-            if (w) { w->dirty = 1; g_srv.dirty = 1; }
         } else { /* AQ_DESTROY: worker ja saiu e removeu do registro */
             unsigned id = (unsigned)it.conn->wid;
             Window *w = win_find(id);
@@ -246,6 +244,17 @@ void appsrv_drain(void)
             free(it.conn);
         }
     }
+
+    /* audit #32: commits sao FLAG (nao fila) -> nunca sao dropados por fila cheia.
+     * O main poll cada conexao aqui e marca a janela suja. */
+    EnterCriticalSection(&g_conns_lock);
+    for (AppConn *c = g_conns; c; c = c->next) {
+        if (InterlockedExchange(&c->commit, 0)) {
+            Window *w = win_find((unsigned)c->wid);
+            if (w) { w->dirty = 1; g_srv.dirty = 1; }
+        }
+    }
+    LeaveCriticalSection(&g_conns_lock);
 }
 
 /* ---- worker por app (overlapped reads) ---- */
@@ -387,10 +396,7 @@ static DWORD WINAPI worker_main(LPVOID arg)
                 break;
             }
         } else if (verb_is(buf, "APP-COMMIT")) {
-            AqItem it;
-            ZeroMemory(&it, sizeof it);
-            it.type = AQ_COMMIT; it.conn = c;
-            aq_push(&it);
+            InterlockedExchange(&c->commit, 1);   /* audit #32: flag (o main poll no drain) */
         } else if (verb_is(buf, "APP-CLOSE")) {
             break;
         }
