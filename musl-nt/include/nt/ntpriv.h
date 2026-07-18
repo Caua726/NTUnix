@@ -82,9 +82,50 @@ nt_sc_t nt_fd_dup(int oldfd, int minimum, int cloexec);
 nt_sc_t nt_fd_dup2(int oldfd, int newfd, int cloexec);
 void nt_fd_set_devkind(int fd, int devkind);
 
-/* sys_ioctl.c: o pty (slave) esta em modo OPOST|ONLCR? (\n de saida -> \r\n,
- * como a disciplina de linha de um tty faria — senao o VT escadeia o texto) */
-int nt_pty_onlcr(void);
+/* ---- termios (layout do Linux x86_64 generic; mesmo que a musl usa) ---- */
+struct nt_termios {
+    uint32_t c_iflag, c_oflag, c_cflag, c_lflag;
+    uint8_t  c_line;
+    uint8_t  c_cc[32];
+    uint32_t c_ispeed, c_ospeed;
+};
+/* c_lflag */
+#define NT_ISIG    0000001u
+#define NT_ICANON  0000002u
+#define NT_ECHO    0000010u
+#define NT_ECHOE   0000020u
+#define NT_ECHOK   0000040u
+#define NT_ECHOCTL 0001000u
+#define NT_IEXTEN  0100000u
+/* c_iflag */
+#define NT_INLCR   0000100u
+#define NT_IGNCR   0000200u
+#define NT_ICRNL   0000400u
+#define NT_IXON    0002000u
+/* c_oflag */
+#define NT_OPOST   0000001u
+#define NT_ONLCR   0000004u
+/* c_cflag */
+#define NT_CS8     0000060u
+#define NT_CREAD   0000200u
+#define NT_CLOCAL  0004000u
+/* indices em c_cc */
+#define NT_VINTR   0
+#define NT_VQUIT   1
+#define NT_VERASE  2
+#define NT_VKILL   3
+#define NT_VEOF    4
+#define NT_VTIME   5
+#define NT_VMIN    6
+
+/* sys_pty.c: pty slave (sem ConPTY) — disciplina de linha N_TTY (cooked/raw,
+ * echo, erase/kill, VINTR->SIGINT), termios e winsize em memoria. */
+void    nt_pty_tcget(struct nt_termios *tio);
+void    nt_pty_tcset(const struct nt_termios *tio);
+void    nt_pty_winsize(unsigned short *cols, unsigned short *rows);
+int     nt_pty_onlcr(void);          /* saida em OPOST|ONLCR? (\n -> \r\n) */
+nt_sc_t nt_pty_read(struct nt_fd *slot, void *buf, uint64_t count);
+nt_sc_t nt_pty_write(struct nt_fd *slot, const void *buf, uint64_t count);
 
 /* ntpath.c */
 size_t nt_strlen(const char *s);

@@ -165,11 +165,12 @@ static nt_sc_t transfer_read(struct nt_fd *slot, void *buf, uint64_t count)
     }
     if (slot->kind == NT_FD_SOCKET)
         return nt_socket_read(slot, buf, amount);
+    if (slot->kind == NT_FD_PTY)      /* disciplina de linha do pty (sys_pty.c) */
+        return nt_pty_read(slot, buf, count);
     /* Pipe não-bloqueante: CreatePipe só oferece I/O bloqueante, então emulamos
      * o O_NONBLOCK da leitura espiando antes. Sem dados e sem EOF => EAGAIN,
      * como no Linux; senão o ReadFile abaixo retorna o que já há sem bloquear. */
-    if ((slot->kind == NT_FD_PIPE || slot->kind == NT_FD_PTY) &&
-        (slot->flags & NT_O_NONBLOCK)) {
+    if (slot->kind == NT_FD_PIPE && (slot->flags & NT_O_NONBLOCK)) {
         DWORD avail = 0;
         if (PeekNamedPipe(slot->handle, 0, 0, 0, &avail, 0)) {
             if (!avail) return -NT_EAGAIN;
@@ -213,6 +214,8 @@ static nt_sc_t transfer_write(struct nt_fd *slot, const void *buf, uint64_t coun
     if (slot->devkind != NT_DEV_NONE) return amount; /* /dev/zero,/dev/random: descarta */
     if (slot->kind == NT_FD_SOCKET)
         return nt_socket_write(slot, buf, amount);
+    if (slot->kind == NT_FD_PTY)      /* saida do pty c/ OPOST/ONLCR (sys_pty.c) */
+        return nt_pty_write(slot, buf, count);
     AcquireSRWLockExclusive(&slot->io_lock);
     if ((slot->flags & NT_O_APPEND) && slot->kind == NT_FD_FILE) {
         end.QuadPart = 0;
@@ -221,32 +224,6 @@ static nt_sc_t transfer_write(struct nt_fd *slot, const void *buf, uint64_t coun
             ReleaseSRWLockExclusive(&slot->io_lock);
             return r;
         }
-    }
-    if (slot->kind == NT_FD_PTY && nt_pty_onlcr()) {
-        /* disciplina de saida do tty: \n -> \r\n (senao o VT escadeia o texto) */
-        const unsigned char *b = buf;
-        DWORD i, start = 0, w;
-        for (i = 0; i < amount; i++) {
-            if (b[i] != '\n') continue;
-            if (i > start && !WriteFile(slot->handle, b + start, i - start, &w, 0)) {
-                nt_sc_t r = nt_last_error();
-                ReleaseSRWLockExclusive(&slot->io_lock);
-                return r;
-            }
-            if (!WriteFile(slot->handle, "\r\n", 2, &w, 0)) {
-                nt_sc_t r = nt_last_error();
-                ReleaseSRWLockExclusive(&slot->io_lock);
-                return r;
-            }
-            start = i + 1;
-        }
-        if (amount > start && !WriteFile(slot->handle, b + start, amount - start, &w, 0)) {
-            nt_sc_t r = nt_last_error();
-            ReleaseSRWLockExclusive(&slot->io_lock);
-            return r;
-        }
-        ReleaseSRWLockExclusive(&slot->io_lock);
-        return amount;   /* conta os bytes logicos, sem os \r injetados */
     }
     if (!WriteFile(slot->handle, buf, amount, &put, 0)) {
         nt_sc_t r = nt_last_error();

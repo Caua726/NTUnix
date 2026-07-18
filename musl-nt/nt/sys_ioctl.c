@@ -10,92 +10,15 @@
 #define NT_TCSETSW  0x5403UL
 #define NT_TCSETSF  0x5404UL
 
-/* struct termios do Linux x86_64 (arch generic) — mesmo layout que a musl usa */
-struct nt_termios {
-    uint32_t c_iflag;
-    uint32_t c_oflag;
-    uint32_t c_cflag;
-    uint32_t c_lflag;
-    uint8_t  c_line;
-    uint8_t  c_cc[32];
-    uint32_t c_ispeed;
-    uint32_t c_ospeed;
-};
-
-/* c_lflag (x86_64 generic) */
-#define NT_ISIG   0000001u
-#define NT_ICANON 0000002u
-#define NT_ECHO   0000010u
-#define NT_IEXTEN 0100000u
-/* c_iflag */
-#define NT_ICRNL  0000400u
-#define NT_IXON   0002000u
-/* c_oflag */
-#define NT_OPOST  0000001u
-#define NT_ONLCR  0000004u
-/* c_cflag */
-#define NT_CS8    0000060u
-#define NT_CREAD  0000200u
-#define NT_CLOCAL 0004000u
-/* índices em c_cc (x86_64 generic) */
-#define NT_VINTR  0
-#define NT_VERASE 2
-#define NT_VEOF   4
-#define NT_VTIME  5
-#define NT_VMIN   6
-
-/* ---- pty slave (sem ConPTY): termios em memoria + winsize via file-mapping
- * compartilhado com o master (dispd). Um pty por processo (o tty controlador). */
-static struct nt_termios g_pty_tio;
-static int g_pty_tio_ready;
-static volatile unsigned short *g_pty_ws;   /* view do mapping: [0]=cols [1]=rows */
-
-static void pty_tio_ensure(void)
-{
-    if (g_pty_tio_ready)
-        return;
-    nt_memset(&g_pty_tio, 0, sizeof g_pty_tio);
-    g_pty_tio.c_iflag = NT_ICRNL | NT_IXON;
-    g_pty_tio.c_oflag = NT_OPOST | NT_ONLCR;
-    g_pty_tio.c_cflag = NT_CS8 | NT_CREAD | NT_CLOCAL;
-    g_pty_tio.c_lflag = NT_ISIG | NT_ICANON | NT_ECHO | NT_IEXTEN;
-    g_pty_tio.c_cc[NT_VINTR]  = 3;
-    g_pty_tio.c_cc[NT_VEOF]   = 4;
-    g_pty_tio.c_cc[NT_VERASE] = 0x7f;
-    g_pty_tio.c_cc[NT_VMIN]   = 1;
-    g_pty_tio.c_cc[NT_VTIME]  = 0;
-    g_pty_tio_ready = 1;
-}
-
-static void pty_winsize(unsigned short *cols, unsigned short *rows)
-{
-    if (!g_pty_ws) {
-        char name[64];
-        if (GetEnvironmentVariableA("NTU_PTY_WS", name, sizeof name) > 0) {
-            HANDLE m = OpenFileMappingA(FILE_MAP_READ, FALSE, name);
-            if (m)   /* a view sobrevive ao close; mantemos pela vida do processo */
-                g_pty_ws = (volatile unsigned short *)
-                    MapViewOfFile(m, FILE_MAP_READ, 0, 0, 4);
-        }
-    }
-    unsigned short c = g_pty_ws ? g_pty_ws[0] : 0;
-    unsigned short r = g_pty_ws ? g_pty_ws[1] : 0;
-    *cols = c ? c : 80;
-    *rows = r ? r : 24;
-}
-
-int nt_pty_onlcr(void)
-{
-    pty_tio_ensure();
-    return (g_pty_tio.c_oflag & NT_OPOST) && (g_pty_tio.c_oflag & NT_ONLCR);
-}
+/* struct nt_termios + flags do termios estao em ntpriv.h (compartilhados com o
+ * sys_pty.c). O pty slave (termios/winsize/disciplina de linha) vive no
+ * sys_pty.c; aqui so despachamos os ioctls do pty pra ele. */
 
 static nt_sc_t termios_get(struct nt_fd *slot, struct nt_termios *tio)
 {
     DWORD mode;
-    if (slot->kind == NT_FD_PTY) {           /* pty: estado em memoria */
-        pty_tio_ensure();
-        *tio = g_pty_tio;
+    if (slot->kind == NT_FD_PTY) {           /* pty: estado em memoria (sys_pty.c) */
+        nt_pty_tcget(tio);
         return 0;
     }
     if (slot->kind != NT_FD_CONSOLE || !GetConsoleMode(slot->handle, &mode))
@@ -122,8 +45,7 @@ static nt_sc_t termios_set(struct nt_fd *slot, const struct nt_termios *tio)
 {
     DWORD mode;
     if (slot->kind == NT_FD_PTY) {           /* pty: guarda o estado em memoria */
-        pty_tio_ensure();
-        g_pty_tio = *tio;
+        nt_pty_tcset(tio);
         return 0;
     }
     if (slot->kind != NT_FD_CONSOLE || !GetConsoleMode(slot->handle, &mode))
@@ -155,7 +77,7 @@ nt_sc_t nt_sys_ioctl(nt_sc_t fd, nt_sc_t request, nt_sc_t arg)
         if (!winsize) return -NT_EFAULT;
         if (slot->kind == NT_FD_PTY) {       /* pty: winsize do mapping do master */
             unsigned short c, r;
-            pty_winsize(&c, &r);
+            nt_pty_winsize(&c, &r);
             winsize->ws_col = c;
             winsize->ws_row = r;
             winsize->ws_xpixel = 0;
