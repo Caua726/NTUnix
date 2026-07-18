@@ -220,27 +220,17 @@ nt_sc_t nt_path_at(int dirfd, const char *path, WCHAR *out, size_t cap)
 
 nt_sc_t nt_path_to_unix(const WCHAR *path, char *out, size_t cap)
 {
-    const WCHAR *start = path;
-    size_t root_len, path_len, n, i;
+    size_t n, i;
     nt_sc_t r;
     if (!path || !out) return -NT_EFAULT;
-    InitOnceExecuteOnce(&root_once, initialize_root, 0, 0);
-    root_len = nt_wcslen(nt_root);
-    path_len = nt_wcslen(path);
-    if (path_len >= root_len && CompareStringOrdinal(path, (int)root_len,
-                                                      nt_root, (int)root_len,
-                                                      TRUE) == CSTR_EQUAL) {
-        start = path + root_len;
-        if (!*start) {
-            if (cap < 2) return -NT_ERANGE;
-            out[0] = '/'; out[1] = 0;
-            return 2;
-        }
-    } else if (((path[0] >= L'A' && path[0] <= L'Z') ||
-                (path[0] >= L'a' && path[0] <= L'z')) && path[1] == L':') {
-        /* fora da raiz do NTUnix, mas com letra de drive -> /mnt/<letra>/...
-         * (inverso do forward mapping). Sem isso, sair da raiz via '..' deixa o
-         * getcwd retornar 'X:/...' e o PWD do ash dessincroniza -> ls/cd quebram. */
+    /* Representacao canonica: TUDO sob /mnt/<letra>/. Um caminho com drive
+     * (X:\...) vira /mnt/x/... — inclusive a raiz do NTUnix (X:\NTUnix ->
+     * /mnt/x/NTUnix). Assim o getcwd nunca dessincroniza (o CWD real sempre tem
+     * um caminho unix valido), a navegacao e' consistente e drives diferentes
+     * (C:\, D:\) aparecem naturalmente. O forward mapping ainda aceita /system/..
+     * (via nt_root) e /mnt/x/NTUnix/system/.. — os dois chegam no mesmo lugar. */
+    if (((path[0] >= L'A' && path[0] <= L'Z') ||
+         (path[0] >= L'a' && path[0] <= L'z')) && path[1] == L':') {
         WCHAR d = path[0];
         if (d >= L'A' && d <= L'Z') d += 32;
         if (6 >= cap) return -NT_ERANGE;
@@ -250,10 +240,12 @@ nt_sc_t nt_path_to_unix(const WCHAR *path, char *out, size_t cap)
         if (r < 0) return r;
         n += 6;
         for (i = 6; i < n; ++i) if (out[i] == '\\') out[i] = '/';
+        if (n > 6 && out[n - 1] == '/') n--;   /* X:\ -> /mnt/x (sem barra final) */
         if (n < cap) out[n] = 0;
         return (nt_sc_t)(n + 1);
     }
-    r = nt_wide_to_utf8(start, nt_wcslen(start), out, cap, &n);
+    /* UNC (\\host\share) e outros: converte cru */
+    r = nt_wide_to_utf8(path, nt_wcslen(path), out, cap, &n);
     if (r < 0) return r;
     for (i = 0; i < n; ++i) if (out[i] == '\\') out[i] = '/';
     return (nt_sc_t)(n + 1); /* getcwd returns byte count including NUL */
