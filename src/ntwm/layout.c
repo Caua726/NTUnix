@@ -96,12 +96,18 @@ void send_frame(void)
             n++;
 
     int g = g_gap;
-    /* nao deixa os gaps consumirem toda a area: mesmo com as n janelas numa
-     * coluna, cada uma precisa de >=1px, senao alturas ficam negativas (#38) */
+    /* nao deixa os gaps consumirem toda a area: cada janela precisa de >=1px.
+     * audit #22: clampa por AMBAS as dimensoes (antes so a altura) — saida
+     * estreita + gap grande empurrava o stack pra fora e a largura caia a 1px. */
     if (n > 1) {
-        int gmax = (g_wh - 2 * g_gap - n) / (n - 1);
+        int gmax = (g_wh - 2 * g_gap - n) / (n - 1);   /* vertical (n numa coluna) */
         if (gmax < 0) gmax = 0;
         if (g > gmax) g = gmax;
+    }
+    {
+        int gmaxw = (g_ww - 2) / 3;   /* horizontal: outer(2g) + master|stack(g) */
+        if (gmaxw < 0) gmaxw = 0;
+        if (g > gmaxw) g = gmaxw;
     }
     if (n > 0) {
         int wx = g_wx + g, wy = g_wy + g;
