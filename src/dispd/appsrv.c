@@ -250,6 +250,14 @@ void appsrv_drain(void)
 
 /* ---- worker por app (overlapped reads) ---- */
 
+/* audit #35: verbo EXATO — o verbo tem que ser seguido de espaco ou fim, senao
+ * "APP-COMMIT-xyz"/"APP-HELLOx" casavam por prefixo. */
+static int verb_is(const char *buf, const char *verb)
+{
+    size_t n = strlen(verb);
+    return !strncmp(buf, verb, n) && (buf[n] == 0 || buf[n] == ' ' || buf[n] == '\t');
+}
+
 static DWORD WINAPI worker_main(LPVOID arg)
 {
     HANDLE pipe = (HANDLE)arg;
@@ -308,7 +316,7 @@ static DWORD WINAPI worker_main(LPVOID arg)
             break;
         buf[n] = 0;
 
-        if (!strncmp(buf, "APP-HELLO", 9) && !created) {
+        if (verb_is(buf, "APP-HELLO") && !created) {
             char *p = buf + 9;
             int w = (int)strtol(p, &p, 10);
             int h = (int)strtol(p, &p, 10);
@@ -357,12 +365,12 @@ static DWORD WINAPI worker_main(LPVOID arg)
                 app_send(c, "APP-ERR create-failed");
                 break;
             }
-        } else if (!strncmp(buf, "APP-COMMIT", 10)) {
+        } else if (verb_is(buf, "APP-COMMIT")) {
             AqItem it;
             ZeroMemory(&it, sizeof it);
             it.type = AQ_COMMIT; it.conn = c;
             aq_push(&it);
-        } else if (!strncmp(buf, "APP-CLOSE", 9)) {
+        } else if (verb_is(buf, "APP-CLOSE")) {
             break;
         }
     }
