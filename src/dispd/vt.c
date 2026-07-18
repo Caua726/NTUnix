@@ -78,7 +78,43 @@ static int cb_settermprop(VTermProp prop, VTermValue *val, void *user)
     } else if (prop == VTERM_PROP_CURSORVISIBLE) {
         t->cur_vis = val->boolean;
         t->dirty = 1;
+    } else if (prop == VTERM_PROP_ALTSCREEN) {
+        t->on_alt = val->boolean;   /* tela alt (vim/htop): sem scrollback */
+        t->scroll_off = 0;
+        t->dirty = 1;
     }
+    return 1;
+}
+
+static COLORREF vcolor(VTermScreen *vts, VTermColor c, COLORREF def);
+
+/* uma linha rolou pra fora do topo -> guarda no ring de scrollback */
+static int cb_sb_pushline(int cols, const VTermScreenCell *cells, void *user)
+{
+    Terminal *t = (Terminal *)user;
+    if (!t->sb || t->sb_cap <= 0)
+        return 0;
+    SBLine *ln = &t->sb[t->sb_head];   /* recicla a linha mais antiga do ring */
+    Cell *nc = (Cell *)realloc(ln->cells, (size_t)cols * sizeof(Cell));
+    if (!nc)
+        return 1;                       /* sem memoria: descarta, mas segue */
+    ln->cells = nc;
+    ln->len = cols;
+    for (int x = 0; x < cols; x++) {
+        VTermScreenCell c = cells[x];
+        ln->cells[x].ch = c.chars[0] ? c.chars[0] : ' ';
+        ln->cells[x].fg = vcolor((VTermScreen *)t->vts, c.fg, DEF_FG);
+        ln->cells[x].bg = vcolor((VTermScreen *)t->vts, c.bg, DEF_BG);
+        ln->cells[x].attr = (unsigned short)((c.attrs.bold ? ATTR_BOLD : 0) |
+                                             (c.attrs.reverse ? ATTR_REVERSE : 0) |
+                                             (c.attrs.underline ? ATTR_UNDERLINE : 0));
+    }
+    t->sb_head = (t->sb_head + 1) % t->sb_cap;
+    if (t->sb_count < t->sb_cap)
+        t->sb_count++;
+    if (t->scroll_off > 0 && t->scroll_off < t->sb_count)
+        t->scroll_off++;                /* mantem a posicao ao rolar historico */
+    t->dirty = 1;
     return 1;
 }
 
@@ -89,7 +125,7 @@ static const VTermScreenCallbacks g_screen_cbs = {
     .settermprop = cb_settermprop,
     .bell        = NULL,
     .resize      = NULL,
-    .sb_pushline = NULL,
+    .sb_pushline = cb_sb_pushline,
     .sb_popline  = NULL,
 };
 
@@ -129,6 +165,11 @@ int vt_use_libvterm(Terminal *t)
     vterm_screen_reset(vts, 1);   /* hard reset */
     t->vt = vt;
     t->vts = vts;
+    /* scrollback: ring de linhas (falha vira "sem scrollback", nao fatal) */
+    t->sb_cap = 2000;
+    t->sb = (SBLine *)calloc((size_t)t->sb_cap, sizeof(SBLine));
+    if (!t->sb)
+        t->sb_cap = 0;
     return 0;
 }
 
@@ -139,8 +180,38 @@ void vt_free(Terminal *t)
         t->vt = NULL;
         t->vts = NULL;
     }
+    if (t->sb) {
+        for (int i = 0; i < t->sb_cap; i++)
+            free(t->sb[i].cells);
+        free(t->sb);
+        t->sb = NULL;
+    }
+    t->sb_cap = t->sb_count = t->sb_head = t->scroll_off = 0;
     free(t->grid);
     t->grid = NULL;
+}
+
+void vt_scroll(Terminal *t, int delta_lines)
+{
+    if (!t)
+        return;
+    EnterCriticalSection(&t->lock);
+    if (!t->on_alt) {
+        t->scroll_off += delta_lines;
+        if (t->scroll_off < 0) t->scroll_off = 0;
+        if (t->scroll_off > t->sb_count) t->scroll_off = t->sb_count;
+        t->dirty = 1;
+    }
+    LeaveCriticalSection(&t->lock);
+}
+
+void vt_scroll_reset(Terminal *t)
+{
+    if (!t)
+        return;
+    EnterCriticalSection(&t->lock);
+    if (t->scroll_off) { t->scroll_off = 0; t->dirty = 1; }
+    LeaveCriticalSection(&t->lock);
 }
 
 void vt_resize(Terminal *t, int cols, int rows)
@@ -265,11 +336,12 @@ static COLORREF vcolor(VTermScreen *vts, VTermColor c, COLORREF def)
 
 void vt_render(Terminal *t, HDC memdc, HFONT font, int cellw, int cellh)
 {
-    int cols, rows, cx, cy, cvis;
+    int cols, rows, cx, cy, cvis, soff;
 
     EnterCriticalSection(&t->lock);
     cols = t->cols; rows = t->rows;
     cx = t->cur_x; cy = t->cur_y; cvis = t->cur_vis;
+    soff = t->scroll_off;
     size_t need = (size_t)cols * rows * sizeof(Cell);
     if (need > g_snap_cap) {
         Cell *ns = (Cell *)realloc(g_snap, need);
@@ -279,12 +351,26 @@ void vt_render(Terminal *t, HDC memdc, HFONT font, int cellw, int cellh)
 
     if (t->vt) {
         VTermScreen *vts = (VTermScreen *)t->vts;
+        int sbn = t->sb_count;
         for (int y = 0; y < rows; y++) {
+            /* viewport: [scrollback (0=mais antiga) .. tela viva], rolada soff */
+            int comb = sbn - soff + y;
+            if (t->sb && comb >= 0 && comb < sbn) {
+                int ring = (t->sb_head - sbn + comb + t->sb_cap) % t->sb_cap;
+                SBLine *ln = &t->sb[ring];
+                for (int x = 0; x < cols; x++) {
+                    Cell *o = &g_snap[y * cols + x];
+                    if (ln->cells && x < ln->len) *o = ln->cells[x];
+                    else { o->ch = ' '; o->fg = DEF_FG; o->bg = DEF_BG; o->attr = 0; }
+                }
+                continue;
+            }
+            int ly = comb - sbn;   /* linha da tela viva */
             for (int x = 0; x < cols; x++) {
-                VTermPos p; p.row = y; p.col = x;
-                VTermScreenCell vc;
                 Cell *o = &g_snap[y * cols + x];
-                if (!vterm_screen_get_cell(vts, p, &vc)) {
+                VTermPos p; p.row = ly; p.col = x;
+                VTermScreenCell vc;
+                if (ly < 0 || ly >= rows || !vterm_screen_get_cell(vts, p, &vc)) {
                     o->ch = ' '; o->fg = DEF_FG; o->bg = DEF_BG; o->attr = 0;
                     continue;
                 }
@@ -343,7 +429,7 @@ void vt_render(Terminal *t, HDC memdc, HFONT font, int cellw, int cellh)
         }
     }
 
-    if (cvis && cx < cols && cy < rows && cx >= 0 && cy >= 0) {
+    if (cvis && !soff && cx < cols && cy < rows && cx >= 0 && cy >= 0) {
         RECT rc = { cx * cellw, cy * cellh, (cx + 1) * cellw, (cy + 1) * cellh };
         InvertRect(memdc, &rc);
     }

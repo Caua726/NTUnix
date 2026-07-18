@@ -27,6 +27,12 @@ typedef struct Cell {
     unsigned short attr;  /* ATTR_* */
 } Cell;
 
+/* uma linha de scrollback (rolou pra fora do topo da tela) */
+typedef struct SBLine {
+    Cell *cells;
+    int   len;
+} SBLine;
+
 typedef struct Terminal {
     struct TerminalBackend *be;
     void  *impl;              /* privado do backend */
@@ -42,6 +48,12 @@ typedef struct Terminal {
 
     /* grade simples do fallback scrape (usada so quando vt == NULL) */
     Cell  *grid;
+
+    /* scrollback (ring de linhas que rolaram do topo; so no caminho libvterm) */
+    SBLine *sb;
+    int    sb_cap, sb_count, sb_head;
+    int    scroll_off;        /* linhas roladas p/ cima (0 = fundo/tempo real) */
+    int    on_alt;            /* tela alternativa (vim/htop): sem scrollback */
 
     volatile int  dirty;      /* conteudo mudou desde o ultimo render */
     volatile long alive;      /* filho ainda vivo (Interlocked) */
@@ -92,6 +104,8 @@ void vt_free(Terminal *t);
 void vt_resize(Terminal *t, int cols, int rows);
 void vt_feed(Terminal *t, const char *bytes, int n);  /* pega o lock internamente */
 void vt_render(Terminal *t, HDC memdc, HFONT font, int cellw, int cellh);
+void vt_scroll(Terminal *t, int delta_lines);  /* +cima (historico) / -baixo */
+void vt_scroll_reset(Terminal *t);             /* volta pro fundo (tempo real) */
 
 /* paleta ANSI 0..15 -> RGB (compartilhada com o scrape) */
 COLORREF vt_ansi_color(int idx);

@@ -173,6 +173,14 @@ static void route_key(unsigned mods, DWORD vk, DWORD scan, int down)
     if (!f->term || !down)                      /* terminal: so no keydown */
         return;
 
+    /* scrollback: Shift+PgUp/PgDn rola o historico (nao vai pro pty) */
+    if ((mods & MOD_SHIFT) && (vk == VK_PRIOR || vk == VK_NEXT)) {
+        int page = f->term->rows > 1 ? f->term->rows - 1 : 1;
+        vt_scroll(f->term, vk == VK_PRIOR ? page : -page);
+        return;
+    }
+    vt_scroll_reset(f->term);                    /* digitou -> volta pro fundo */
+
     const char *seq = special_seq(vk, mods);    /* teclas especiais -> VT */
     if (seq) { term_input(f->term, seq, (int)strlen(seq)); return; }
 
@@ -268,7 +276,11 @@ void input_mouse(int sx, int sy, int button, int press, int motion)
     } else if (w->term) {
         int col = g_srv.cellw > 0 ? cx / g_srv.cellw : 0;
         int row = g_srv.cellh > 0 ? cy / g_srv.cellh : 0;
-        term_mouse(w->term, col, row, button, press, motion);
+        if (button >= 64 && !w->term->on_alt) {   /* roda no shell -> scrollback */
+            vt_scroll(w->term, button == 64 ? 3 : -3);
+        } else {
+            term_mouse(w->term, col, row, button, press, motion);
+        }
     }
 }
 
