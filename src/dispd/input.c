@@ -123,8 +123,14 @@ static int builtin_key(unsigned mods, DWORD vk)
         return 0;
     if (vk == VK_RETURN) { spawn_terminal(NULL); return 1; }
     if (vk == VK_TAB) {
-        Window *n = g_srv.focused && g_srv.focused->next ? g_srv.focused->next
-                                                         : g_srv.windows;
+        /* audit #8: circula SO entre janelas visiveis do ws atual (nunca foca
+         * uma janela oculta/de outro workspace) */
+        Window *start = g_srv.focused, *n = NULL;
+        for (Window *w = start ? start->next : g_srv.windows; w; w = w->next)
+            if (w->visible && w->ws == g_srv.cur_ws) { n = w; break; }
+        if (!n)                                  /* wrap: do inicio ate o foco */
+            for (Window *w = g_srv.windows; w && w != start; w = w->next)
+                if (w->visible && w->ws == g_srv.cur_ws) { n = w; break; }
         if (n) win_focus(n);
         return 1;
     }
@@ -149,16 +155,21 @@ static void route_key(unsigned mods, DWORD vk, DWORD scan, int down)
     if (!f)
         return;   /* nada focado: nao engole (#19) */
 
-    /* traduz o caractere (respeita shift/caps/ctrl/AltGr; layout do usuario) */
-    int altgr = (GetAsyncKeyState(VK_RMENU) & 0x8000) != 0;
-    BYTE ks[256];
-    memset(ks, 0, sizeof ks);
-    if (mods & MOD_SHIFT) ks[VK_SHIFT] = 0x80;
-    if (mods & MOD_CTRL)  ks[VK_CONTROL] = 0x80;
-    if (altgr) { ks[VK_CONTROL] = 0x80; ks[VK_MENU] = 0x80; }
-    if (GetKeyState(VK_CAPITAL) & 1) ks[VK_CAPITAL] = 1;
+    /* traduz o caractere SO no keydown: ToUnicodeEx tem efeito colateral no
+     * estado de dead keys/AltGr; chamar no keyup consumiria/produziria
+     * composicao na fase errada (audit #14). No keyup r fica 0 (sem char). */
     WCHAR wb[8];
-    int r = ToUnicodeEx((UINT)vk, (UINT)scan, ks, wb, 8, 0, GetKeyboardLayout(0));
+    int r = 0;
+    if (down) {
+        int altgr = (GetAsyncKeyState(VK_RMENU) & 0x8000) != 0;
+        BYTE ks[256];
+        memset(ks, 0, sizeof ks);
+        if (mods & MOD_SHIFT) ks[VK_SHIFT] = 0x80;
+        if (mods & MOD_CTRL)  ks[VK_CONTROL] = 0x80;
+        if (altgr) { ks[VK_CONTROL] = 0x80; ks[VK_MENU] = 0x80; }
+        if (GetKeyState(VK_CAPITAL) & 1) ks[VK_CAPITAL] = 1;
+        r = ToUnicodeEx((UINT)vk, (UINT)scan, ks, wb, 8, 0, GetKeyboardLayout(0));
+    }
 
     if (f->kind == WK_APP) {                    /* app: evento estruturado down/up */
         unsigned cp = 0;
