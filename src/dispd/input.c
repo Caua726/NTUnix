@@ -19,6 +19,7 @@
 static HHOOK g_hook;
 static unsigned char g_down[256];       /* teclas fisicamente pressionadas (#26) */
 static unsigned char g_suppressed[256]; /* keydown suprimido -> suprime o keyup (#11) */
+static unsigned char g_to_app[256];     /* keydown FOI entregue ao app -> keyup tambem (#10) */
 
 /* fila de teclas (produtor: hook/WM_KEY*; consumidor: frame_tick — mesmo thread) */
 typedef struct { unsigned mods; DWORD vk, scan; int down; } KeyEv;
@@ -231,7 +232,6 @@ static int enqueue(DWORD vk, DWORD scan, int down)
 
     if (down) {
         int repeat = g_down[idx];
-        g_down[idx] = 1;
         int grab = !mod && wmproto_connected() && wmproto_grabbed(mods, vk);
         if (grab && repeat)
             return 1;                       /* #26: suprime auto-repeat em grabs */
@@ -239,24 +239,35 @@ static int enqueue(DWORD vk, DWORD scan, int down)
         /* entrega: grab, ou janela focada (modifiers so vao pra app) */
         int want = grab || (g_srv.focused != NULL && (!mod || app));
         int suppress = grab || (g_srv.focused != NULL && !mod);
+        int to_app = 0;
         if (want) {
             if (!kq_push(mods, vk, scan, 1)) {   /* #14: nao suprime o que nao enfileirou */
+                /* audit #12: NAO marca g_down — senao o proximo auto-repeat
+                 * viraria "repeat" e seria suprimido como se este tivesse sido
+                 * entregue. Deixa g_down=0 pra a repeticao tentar de novo. */
+                g_down[idx] = 0;
                 dispd_log("input: fila cheia, tecla perdida");
                 return 0;
             }
             g_srv.keys_seen++;
             g_srv.dirty = 1;
+            to_app = (app && !grab);          /* #10: entregue AO APP (nao foi grab) */
         }
+        g_down[idx] = 1;                      /* #12: so marca down apos entregar */
         g_suppressed[idx] = (unsigned char)(suppress ? 1 : 0);
+        g_to_app[idx] = (unsigned char)(to_app ? 1 : 0);
         return suppress;
     } else {
         g_down[idx] = 0;
-        int app = g_srv.focused && g_srv.focused->kind == WK_APP;
-        if (app)
-            kq_push(mods, vk, scan, 0);         /* app recebe keyup, INCLUSIVE de
-                                                 * modificadores (simetrico ao down,
-                                                 * senao a tecla fica "presa" #10) */
-        int suppress = g_suppressed[idx];        /* suprime o par do keydown (#11) */
+        int to_app = g_to_app[idx];
+        g_to_app[idx] = 0;
+        /* audit #10: so manda o keyup pro app se o KEYDOWN foi pro app (nao um
+         * grab consumido pelo WM) — senao o app recebe um keyup orfao. */
+        if (to_app) {
+            if (!kq_push(mods, vk, scan, 0))     /* audit #11: checa o retorno */
+                dispd_log("input: fila cheia, keyup perdido (mod pode ficar preso)");
+        }
+        int suppress = g_suppressed[idx];        /* suprime o par do keydown */
         g_suppressed[idx] = 0;
         return suppress;
     }
