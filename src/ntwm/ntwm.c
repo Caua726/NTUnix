@@ -189,6 +189,8 @@ static void handle(char *line)
                (unsigned)strtoul(av[2], NULL, 16));
     } else if (!strcmp(verb, EVT_SYNC) || !strcmp(verb, EVT_RESYNC)) {
         send_frame();               /* layout inicial (SYNC) ou re-declaracao (RESYNC #71) */
+    } else if (!strcmp(verb, EVT_PING)) {
+        wm_send("%s", CMD_PONG);    /* heartbeat: prova de vida pro dispd (#62) */
     }
 }
 

@@ -42,6 +42,7 @@
 #define EVT_SYNC       "SYNC"
 #define EVT_RESYNC     "RESYNC"       /* dispd perdeu comandos -> WM re-declara o quadro */
 #define EVT_ERR        "ERR"          /* ERR <motivo...> */
+#define EVT_PING       "PING"         /* dispd -> ntwm: heartbeat (espera PONG) #62 */
 
 /* comandos ntwm -> dispd */
 #define CMD_HELLO      "HELLO"        /* HELLO ntwm <ver> */
@@ -59,6 +60,7 @@
 #define CMD_GRAB       "GRAB"         /* GRAB <mods> <vk> */
 #define CMD_UNGRAB     "UNGRAB"       /* UNGRAB <mods> <vk> */
 #define CMD_QUIT       "QUIT"
+#define CMD_PONG       "PONG"         /* ntwm -> dispd: resposta ao PING (liveness) #62 */
 
 /*
  * Split reentrante em tokens separados por espaco/tab. Devolve a contagem.

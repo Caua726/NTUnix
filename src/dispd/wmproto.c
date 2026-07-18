@@ -400,6 +400,9 @@ static void apply(char *line)
     if (!g_hello)
         return;                                     /* ignora comandos antes do HELLO */
 
+    if (!strcmp(verb, CMD_PONG))                    /* heartbeat: recebe-lo ja basta (#62) */
+        return;
+
     if (!strcmp(verb, CMD_FRAME_BEGIN)) {
         frame_clear();
         g_buffering = 1;
@@ -454,6 +457,12 @@ void wmproto_drain(void)
         dispd_log("wmproto: fila estourou — pedindo RESYNC ao ntwm");
         wm_send(EVT_RESYNC);
     }
+
+    /* heartbeat (#62): PING periodico (~2s) — o WM sadio responde PONG e mantem
+     * a leitora viva; um WM travado nao responde e estoura o deadline de 6s. */
+    static unsigned ping_tick;
+    if (g_hello && (ping_tick++ % 120) == 0)
+        wm_send(EVT_PING);
 
     LONG cur = InterlockedCompareExchange(&g_gen, 0, 0);
     char *line;
@@ -518,9 +527,12 @@ static DWORD WINAPI reader_main(LPVOID arg)
                 ResetEvent(g_rev);
                 BOOL ok = ReadFile(g_pipe, buf, sizeof buf, &nr, &rov);
                 if (!ok && GetLastError() == ERROR_IO_PENDING) {
-                    /* deadline: cliente que conecta e nao fala nao pode prender
-                     * o unico slot do WM pra sempre (#84) */
-                    DWORD to = got_first ? INFINITE : 8000;
+                    /* deadline: cliente que conecta e nao fala nao pode prender o
+                     * slot pra sempre (#84). audit #49/#62: mesmo APOS o handshake
+                     * ha deadline (heartbeat) — o dispd manda PING periodico e o
+                     * WM sadio responde PONG; um WM travado (vivo mas mudo) nao
+                     * responde, estoura o deadline e cai (initd respawna). */
+                    DWORD to = got_first ? 6000 : 8000;
                     if (WaitForSingleObject(g_rev, to) == WAIT_OBJECT_0)
                         ok = GetOverlappedResult(g_pipe, &rov, &nr, FALSE);
                     else {
