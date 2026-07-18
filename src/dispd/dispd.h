@@ -45,6 +45,7 @@ typedef struct Window {
     HANDLE    section;     /* kind==WK_APP: section compartilhada com o app */
     HWND      hwnd;        /* kind==WK_FOREIGN: a janela do Windows gerenciada */
     LONG_PTR  orig_style;  /* estilo original (p/ restaurar ao soltar) */
+    RECT      fg_target;   /* kind==WK_FOREIGN: onde a janela DEVE ficar (re-snap) */
     struct Window *next;
 } Window;
 #define MAX_TABS 16

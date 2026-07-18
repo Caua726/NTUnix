@@ -11,6 +11,8 @@
  */
 #include "dispd.h"
 
+static void foreign_resnap(HWND h);   /* fwd: usado em win_event, definido abaixo */
+
 static Window *win_by_hwnd(HWND h)
 {
     for (Window *w = g_srv.windows; w; w = w->next)
@@ -110,6 +112,9 @@ static void CALLBACK win_event(HWINEVENTHOOK hook, DWORD event, HWND h,
         }
         break;
     }
+    case EVENT_OBJECT_LOCATIONCHANGE:  /* usuario arrastou -> volta pro tile */
+        foreign_resnap(h);
+        break;
     default:
         break;
     }
@@ -129,6 +134,8 @@ void foreign_init(void)
     SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, NULL, win_event, 0, 0, f);
     SetWinEventHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_HIDE, NULL, win_event, 0, 0, f); /* 0x8000..0x8003 */
     SetWinEventHook(EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE, NULL, win_event, 0, 0, f);
+    SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE,
+                    NULL, win_event, 0, 0, f);   /* re-snap ao arrastar */
 }
 
 void foreign_place(Window *w, int x, int y, int cw, int ch)
@@ -137,7 +144,32 @@ void foreign_place(Window *w, int x, int y, int cw, int ch)
         return;
     if (cw < 1) cw = 1;
     if (ch < 1) ch = 1;
+    SetRect(&w->fg_target, x, y, x + cw, y + ch);   /* alvo p/ o re-snap */
     SetWindowPos(w->hwnd, NULL, x, y, cw, ch, SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+/* O taskmgr (e apps de frame custom DWM) desenha a propria barra no client-area,
+ * entao continua arrastavel mesmo sem WS_CAPTION. Quando a janela gerenciada sai
+ * do tile, snap de volta pro alvo — assim ela nao pode ser movida pra fora. */
+static void foreign_resnap(HWND h)
+{
+    Window *w = win_by_hwnd(h);
+    if (!w || !w->hwnd || !IsWindow(w->hwnd))
+        return;
+    if (w->fg_target.right <= w->fg_target.left)
+        return;                             /* ainda nao foi colocada */
+    RECT r;
+    if (!GetWindowRect(w->hwnd, &r))
+        return;
+    int dx = (int)(r.left - w->fg_target.left), dy = (int)(r.top - w->fg_target.top);
+    if (dx < 0) dx = -dx;
+    if (dy < 0) dy = -dy;
+    if (dx < 10 && dy < 10)
+        return;                             /* perto o bastante -> nao briga */
+    SetWindowPos(w->hwnd, NULL, w->fg_target.left, w->fg_target.top,
+                 w->fg_target.right - w->fg_target.left,
+                 w->fg_target.bottom - w->fg_target.top,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 void foreign_focus(Window *w)
