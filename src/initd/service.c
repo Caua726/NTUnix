@@ -139,6 +139,11 @@ int svc_scan_units(void)
         Service *s = svc_find(parsed.name);
         if (!s) {
             s = calloc(1, sizeof *s);
+            if (!s) {   /* audit #77: OOM -> memcpy(NULL) crasharia; ignora a unit */
+                LeaveCriticalSection(&g_lock);
+                ilog("%s: OOM ao registrar servico, ignorada", parsed.name);
+                continue;
+            }
             memcpy(s, &parsed, sizeof *s);
             s->state = ST_STOPPED;
             s->next = g_services;
@@ -212,9 +217,17 @@ static int svc_spawn(Service *s, char *err, size_t errcap)
         /* Wine antigo pode nao suportar limite de memoria — tenta sem */
         jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         jeli.JobMemoryLimit = 0;
-        if (SetInformationJobObject(job, JobObjectExtendedLimitInformation,
-                                    &jeli, sizeof jeli))
-            ilog("%s: MemoryMax nao suportado aqui, seguindo sem limite", s->name);
+        if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation,
+                                     &jeli, sizeof jeli)) {
+            /* audit #72: sem KILL_ON_JOB_CLOSE os filhos escapam do kill
+             * coletivo (viram orfaos) -> aborta em vez de job sem contencao */
+            snprintf(err, errcap, "SetInformationJobObject falhou (%lu)",
+                     GetLastError());
+            CloseHandle(hlog);
+            CloseHandle(job);
+            return -1;
+        }
+        ilog("%s: MemoryMax nao suportado aqui, seguindo sem limite", s->name);
     }
 
     STARTUPINFOA si;
@@ -257,7 +270,17 @@ static int svc_spawn(Service *s, char *err, size_t errcap)
         CloseHandle(job);
         return -1;
     }
-    ResumeThread(pi.hThread);
+    /* audit #71: ResumeThread falho deixaria o filho SUSPENSO pra sempre
+     * (servico "running" mas congelado, watcher esperando eternamente) —
+     * aborta e limpa job/processo. */
+    if (ResumeThread(pi.hThread) == (DWORD)-1) {
+        snprintf(err, errcap, "ResumeThread falhou (%lu): %s", GetLastError(), cmd);
+        TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        CloseHandle(job);
+        return -1;
+    }
     CloseHandle(pi.hThread);
 
     s->job = job;
