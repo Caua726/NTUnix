@@ -144,6 +144,7 @@ static unsigned char g_line[4096];
 static int g_line_len;    /* bytes na linha */
 static int g_line_out;    /* ja entregue ao leitor (entrega parcial) */
 static int g_line_ready;  /* linha completa (\n ou VEOF) */
+static int g_pending = -1; /* audit #106: char que nao coube no buffer cheio */
 
 nt_sc_t nt_pty_read(struct nt_fd *slot, void *ubuf, uint64_t count)
 {
@@ -157,26 +158,31 @@ nt_sc_t nt_pty_read(struct nt_fd *slot, void *ubuf, uint64_t count)
 
     while (!g_line_ready) {
         unsigned char c;
-        DWORD got = 0;
-        if (slot->flags & NT_O_NONBLOCK) {   /* audit #105: canonico tambem respeita
-                                              * O_NONBLOCK — sem bytes e sem linha
-                                              * completa -> EAGAIN (nao bloqueia) */
-            DWORD avail = 0;
-            if (PeekNamedPipe(slot->handle, 0, 0, 0, &avail, 0)) {
-                if (!avail)
-                    return -NT_EAGAIN;
-            } else if (GetLastError() == ERROR_BROKEN_PIPE) {
-                g_line_ready = 1;
-                break;
+        if (g_pending >= 0) {                 /* audit #106: char guardado do buffer cheio */
+            c = (unsigned char)g_pending;
+            g_pending = -1;
+        } else {
+            DWORD got = 0;
+            if (slot->flags & NT_O_NONBLOCK) {   /* audit #105: canonico tambem respeita
+                                                  * O_NONBLOCK — sem bytes e sem linha
+                                                  * completa -> EAGAIN (nao bloqueia) */
+                DWORD avail = 0;
+                if (PeekNamedPipe(slot->handle, 0, 0, 0, &avail, 0)) {
+                    if (!avail)
+                        return -NT_EAGAIN;
+                } else if (GetLastError() == ERROR_BROKEN_PIPE) {
+                    g_line_ready = 1;
+                    break;
+                }
             }
+            if (!ReadFile(slot->handle, &c, 1, &got, 0)) {
+                DWORD e = GetLastError();
+                if (e == ERROR_BROKEN_PIPE || e == ERROR_HANDLE_EOF) { g_line_ready = 1; break; }
+                if (e == ERROR_OPERATION_ABORTED) return -NT_EINTR;
+                return nt_error(e);
+            }
+            if (got == 0) { g_line_ready = 1; break; }   /* EOF */
         }
-        if (!ReadFile(slot->handle, &c, 1, &got, 0)) {
-            DWORD e = GetLastError();
-            if (e == ERROR_BROKEN_PIPE || e == ERROR_HANDLE_EOF) { g_line_ready = 1; break; }
-            if (e == ERROR_OPERATION_ABORTED) return -NT_EINTR;
-            return nt_error(e);
-        }
-        if (got == 0) { g_line_ready = 1; break; }   /* EOF */
 
         /* mapeamento de entrada */
         if (c == '\r') {
@@ -229,6 +235,12 @@ nt_sc_t nt_pty_read(struct nt_fd *slot, void *ubuf, uint64_t count)
         if (g_line_len < (int)sizeof g_line - 1) {
             g_line[g_line_len++] = c;
             if (g_tio.c_lflag & NT_ECHO) pty_echo_char(c);
+        } else {
+            /* audit #106: buffer cheio -> entrega a linha atual e guarda o char
+             * pro proximo read (entrega em pedacos, sem perder dados) */
+            g_pending = c;
+            g_line_ready = 1;
+            break;
         }
         if (c == '\n') { g_line_ready = 1; break; }
     }
