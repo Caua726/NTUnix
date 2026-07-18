@@ -46,6 +46,11 @@
 #define EVT_WSREQ      "WSREQ"        /* dispd -> ntwm: usuario pediu workspace <n> #3 */
 #define EVT_MOVED      "MOVED"        /* dispd -> ntwm: MOVED <wid> <x> <y> <w> <h> #5 */
 
+/* audit #51/#52/#53: cap COMPARTILHADO de janelas — mesmo limite no snapshot, no
+ * hit-test e no budget, com log explicito quando estourado (nunca na pratica:
+ * 256 e' muito alem de qualquer uso real de um desktop tiling). */
+#define NTU_MAX_WINDOWS 256
+
 /* comandos ntwm -> dispd */
 #define CMD_HELLO      "HELLO"        /* HELLO ntwm <ver> */
 #define CMD_FRAME_BEGIN  "FRAME-BEGIN"

@@ -236,10 +236,13 @@ static void send_snapshot(void)
     /* ordem estavel: a lista do dispd e' prepend (mais novo primeiro); envio em
      * ordem REVERSA (mais antigo primeiro) pra que o ntwm, que tambem prepend,
      * reconstrua a mesma ordem master/stack (#32). Inclui ws e floating (#33). */
-    Window *arr[256];
+    Window *arr[NTU_MAX_WINDOWS];
     int nw = 0;
-    for (Window *w = g_srv.windows; w && nw < 256; w = w->next)
-        arr[nw++] = w;
+    Window *cw = g_srv.windows;
+    for (; cw && nw < NTU_MAX_WINDOWS; cw = cw->next)
+        arr[nw++] = cw;
+    if (cw)   /* audit #51: estourou o cap -> o WM nao veria as extras; loga */
+        dispd_log("wmproto: snapshot truncado em %d janelas (cap NTU_MAX_WINDOWS)", nw);
     for (int i = nw - 1; i >= 0; i--) {
         Window *w = arr[i];
         snprintf(b, sizeof b, "%s %u %d %lu %d %d %s", EVT_WINDOW, w->id,
