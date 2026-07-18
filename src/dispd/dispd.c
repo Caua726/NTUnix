@@ -240,16 +240,14 @@ static int frame_tick(void)   /* retorna 1 se apresentou um quadro */
      * um tick periodico cobre relogio e piscar do cursor. So terminais
      * VISIVEIS forcam repaint — um terminal oculto que gera saida nao (#13). */
     static unsigned tick;
-    int need = g_srv.dirty;
+    if ((tick++ % 30) == 0)
+        g_srv.bar_dirty = 1;        /* relogio + titulo do focado (~2x/s) */
+    int need = g_srv.dirty || g_srv.bar_dirty;
     for (Window *w = g_srv.windows; w && !need; w = w->next)
         if (w->visible && w->ws == g_srv.cur_ws && w->term && w->term->dirty)
             need = 1;
-    if ((tick++ % 30) == 0)
-        need = 1;
-    if (need) {
-        compose_and_present();
-        g_srv.dirty = 0;
-    }
+    if (need)
+        compose_and_present();      /* dono do clear de dirty/bar_dirty */
     return need;
 }
 

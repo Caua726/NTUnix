@@ -17,6 +17,8 @@ typedef struct Frame {
     void   *bgra;    /* bits do DIB, top-down 32bpp BGRA (caminho DXGI) */
     int     w, h;
     int     stride;  /* bytes por linha (= w*4) */
+    /* damage: sub-retangulo a apresentar (dirty_w<=0 => quadro inteiro) */
+    int     dirty_x, dirty_y, dirty_w, dirty_h;
 } Frame;
 
 typedef struct PresentBackend {

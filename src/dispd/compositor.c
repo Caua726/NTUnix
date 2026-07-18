@@ -409,50 +409,107 @@ static int glass_opacity(void)
     return op;
 }
 
-/* gradiente vertical no backbuffer (escuro-azulado -> roxo-escuro) */
-static void draw_wallpaper(void)
+/* damage tracking (deep-compositors §0.1: "sem damage voce redesenha a tela
+ * inteira todo frame — inaceitavel no software"). DISPD_DAMAGE=0 desliga (volta
+ * ao recompose-tela-cheia). So no backend GDI — o flip DXGI apresenta o buffer
+ * inteiro de qualquer forma, entao sub-retangulo nao ajuda la. */
+static int damage_enabled(void)
+{
+    static int en = -1;
+    if (en < 0) {
+        char v[8] = "";
+        GetEnvironmentVariableA("DISPD_DAMAGE", v, sizeof v);
+        en = (v[0] == '0') ? 0 : 1;
+    }
+    if (en && g_srv.present && g_srv.present->name &&
+        strcmp(g_srv.present->name, "gdi") != 0)
+        return 0;
+    return en;
+}
+
+static int rects_hit(const RECT *a, const RECT *b)
+{
+    return a->left < b->right && b->left < a->right &&
+           a->top < b->bottom && b->top < a->bottom;
+}
+
+/* gradiente vertical (escuro-azulado -> roxo-escuro) num retangulo do backbuffer.
+ * So [x0,x1) x [y0,y1) — o damage repinta so o que mudou. */
+static void draw_wallpaper_rect(int x0, int y0, int x1, int y1)
 {
     unsigned char *p = (unsigned char *)g_srv.cbits;
     int W = g_srv.scr_w, H = g_srv.scr_h, stride = g_srv.frame.stride;
     if (!p)
         return;
-    for (int y = 0; y < H; y++) {
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > W) x1 = W;
+    if (y1 > H) y1 = H;
+    for (int y = y0; y < y1; y++) {
         int tt = H > 1 ? (y * 255 / (H - 1)) : 0;
         unsigned char r = (unsigned char)(20 + (40 - 20) * tt / 255);
         unsigned char g = (unsigned char)(20 + (26 - 20) * tt / 255);
         unsigned char b = (unsigned char)(30 + (56 - 30) * tt / 255);
         unsigned char *row = p + (size_t)y * stride;
-        for (int x = 0; x < W; x++) {
+        for (int x = x0; x < x1; x++) {
             row[x * 4 + 0] = b; row[x * 4 + 1] = g; row[x * 4 + 2] = r; row[x * 4 + 3] = 255;
         }
     }
 }
 
-/* blenda o DIB da janela sobre o backbuffer (glass translucido); com opacidade
- * cheia cai no BitBlt opaco (rapido) */
-static void blit_glass(HDC memdc, const void *sbits, int sw,
-                       int dx, int dy, int bw, int bh)
+/* coleta janelas visiveis do ws atual, ordenadas por z crescente */
+static int collect_visible(Window **vis, int cap)
 {
-    if (glass_opacity() >= 255) {
-        BitBlt(g_srv.cdc, dx, dy, bw, bh, memdc, 0, 0, SRCCOPY);
+    int nv = 0;
+    for (Window *w = g_srv.windows; w && nv < cap; w = w->next)
+        if (w->visible && w->ws == g_srv.cur_ws)
+            vis[nv++] = w;
+    for (int i = 1; i < nv; i++) {
+        Window *k = vis[i];
+        int j = i - 1;
+        while (j >= 0 && vis[j]->z > k->z) { vis[j + 1] = vis[j]; j--; }
+        vis[j + 1] = k;
+    }
+    return nv;
+}
+
+/* blenda o DIB da janela sobre o backbuffer (glass translucido), limitado a
+ * `clip` (o retangulo de damage; NULL = sem limite). Opacidade cheia -> BitBlt
+ * opaco (rapido). O src e' amostrado em (px-dx, py-dy). */
+static void blit_glass(HDC memdc, const void *sbits, int sw,
+                       int dx, int dy, int bw, int bh, const RECT *clip)
+{
+    int W = g_srv.scr_w, H = g_srv.scr_h;
+    int x0 = dx, y0 = dy, x1 = dx + bw, y1 = dy + bh;
+    if (clip) {
+        if (x0 < clip->left)   x0 = clip->left;
+        if (y0 < clip->top)    y0 = clip->top;
+        if (x1 > clip->right)  x1 = clip->right;
+        if (y1 > clip->bottom) y1 = clip->bottom;
+    }
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > W) x1 = W;
+    if (y1 > H) y1 = H;
+    if (x0 >= x1 || y0 >= y1)
+        return;
+
+    if (glass_opacity() >= 255) {   /* opaco: BitBlt so a interseccao */
+        BitBlt(g_srv.cdc, x0, y0, x1 - x0, y1 - y0, memdc, x0 - dx, y0 - dy, SRCCOPY);
         return;
     }
     GdiFlush();   /* garante que o ExtTextOut do vt_render chegou ao DIB */
     unsigned char *dst = (unsigned char *)g_srv.cbits;
     const unsigned char *src = (const unsigned char *)sbits;
     if (!dst || !src) return;
-    int W = g_srv.scr_w, H = g_srv.scr_h, dstride = g_srv.frame.stride, sstride = sw * 4;
+    int dstride = g_srv.frame.stride, sstride = sw * 4;
     int a = glass_opacity(), ia = 255 - a;
-    for (int y = 0; y < bh; y++) {
-        int py = dy + y;
-        if (py < 0 || py >= H) continue;
+    for (int py = y0; py < y1; py++) {
         unsigned char *drow = dst + (size_t)py * dstride;
-        const unsigned char *srow = src + (size_t)y * sstride;
-        for (int x = 0; x < bw; x++) {
-            int px = dx + x;
-            if (px < 0 || px >= W) continue;
+        const unsigned char *srow = src + (size_t)(py - dy) * sstride;
+        for (int px = x0; px < x1; px++) {
             unsigned char *d = drow + px * 4;
-            const unsigned char *s = srow + x * 4;
+            const unsigned char *s = srow + (px - dx) * 4;
             d[0] = (unsigned char)((s[0] * a + d[0] * ia) >> 8);
             d[1] = (unsigned char)((s[1] * a + d[1] * ia) >> 8);
             d[2] = (unsigned char)((s[2] * a + d[2] * ia) >> 8);
@@ -460,109 +517,164 @@ static void blit_glass(HDC memdc, const void *sbits, int sw,
     }
 }
 
-void compose_and_present(void)
+/* compoe UMA janela (borda + barra de abas + conteudo) dentro de `clip`. As
+ * operacoes GDI ja saem clipadas pela regiao selecionada no cdc; o blit_glass
+ * (loop de pixel manual) recebe o clip explicito. */
+static void compose_one_window(Window *w, const RECT *clip)
 {
-    /* fundo: gradiente (o glass do terminal deixa ele aparecer) */
-    draw_wallpaper();
+    if (w->kind == WK_TERM && w->term && w->term->dirty)
+        vt_render(w->term, w->memdc, g_srv.font, g_srv.cellw, g_srv.cellh);
 
-    /* coleta visiveis do ws atual */
-    Window *vis[256];
-    int nv = 0;
-    for (Window *w = g_srv.windows; w && nv < 256; w = w->next)
-        if (w->visible && w->ws == g_srv.cur_ws)
-            vis[nv++] = w;
-    /* ordena por z crescente (insertion sort, N pequeno) */
-    for (int i = 1; i < nv; i++) {
-        Window *k = vis[i];
-        int j = i - 1;
-        while (j >= 0 && vis[j]->z > k->z) { vis[j + 1] = vis[j]; j--; }
-        vis[j + 1] = k;
-    }
+    /* borda: MOLDURA (nao preenche o miolo -> o wallpaper aparece sob o
+     * glass do terminal). foco = destaque */
+    COLORREF bc = w->focused ? BORDER_FOCUS : w->border_rgb;
+    HBRUSH bb = CreateSolidBrush(bc);
+    int bp = w->border_px;
+    RECT edges[4] = {
+        { w->rect.left, w->rect.top, w->rect.right, w->rect.top + bp },
+        { w->rect.left, w->rect.bottom - bp, w->rect.right, w->rect.bottom },
+        { w->rect.left, w->rect.top, w->rect.left + bp, w->rect.bottom },
+        { w->rect.right - bp, w->rect.top, w->rect.right, w->rect.bottom },
+    };
+    for (int e = 0; e < 4; e++)
+        FillRect(g_srv.cdc, &edges[e], bb);
+    DeleteObject(bb);
 
-    for (int i = 0; i < nv; i++) {
-        Window *w = vis[i];
-        pump_title(w);
-        if (w->kind == WK_TERM && w->term && w->term->dirty)
-            vt_render(w->term, w->memdc, g_srv.font, g_srv.cellw, g_srv.cellh);
+    int ix = w->rect.left + w->border_px;
+    int iy = w->rect.top + w->border_px;
+    int iw = (w->rect.right - w->rect.left) - 2 * w->border_px;
 
-        /* borda: MOLDURA (nao preenche o miolo -> o wallpaper aparece sob o
-         * glass do terminal). foco = destaque */
-        COLORREF bc = w->focused ? BORDER_FOCUS : w->border_rgb;
-        HBRUSH bb = CreateSolidBrush(bc);
-        int bp = w->border_px;
-        RECT edges[4] = {
-            { w->rect.left, w->rect.top, w->rect.right, w->rect.top + bp },
-            { w->rect.left, w->rect.bottom - bp, w->rect.right, w->rect.bottom },
-            { w->rect.left, w->rect.top, w->rect.left + bp, w->rect.bottom },
-            { w->rect.right - bp, w->rect.top, w->rect.right, w->rect.bottom },
-        };
-        for (int e = 0; e < 4; e++)
-            FillRect(g_srv.cdc, &edges[e], bb);
-        DeleteObject(bb);
-
-        int ix = w->rect.left + w->border_px;
-        int iy = w->rect.top + w->border_px;
-        int iw = (w->rect.right - w->rect.left) - 2 * w->border_px;
-
-        /* barra de ABAS do terminal (i3-ish); barra de titulo simples p/ apps */
-        if (g_srv.title_h > 0 && iw > 0) {
-            SelectObject(g_srv.cdc, g_srv.font);
-            SetBkMode(g_srv.cdc, TRANSPARENT);
-            if (w->kind == WK_TERM && w->ntabs > 0) {
-                int tw = iw / w->ntabs;
-                if (tw < 1) tw = 1;
-                for (int ti = 0; ti < w->ntabs; ti++) {
-                    int tx = ix + ti * tw;
-                    int twid = (ti == w->ntabs - 1) ? (ix + iw - tx) : tw;
-                    int act = (ti == w->active_tab);
-                    RECT tb = { tx, iy, tx + twid, iy + g_srv.title_h };
-                    COLORREF tc = act ? (w->focused ? BORDER_FOCUS : RGB(70, 70, 84))
-                                      : RGB(30, 30, 38);
-                    HBRUSH tbb = CreateSolidBrush(tc);
-                    FillRect(g_srv.cdc, &tb, tbb);
-                    DeleteObject(tbb);
-                    Terminal *tt = w->tabs[ti];
-                    const char *base = (tt && tt->title[0]) ? tt->title : "sh";
-                    char lbl[288];
-                    snprintf(lbl, sizeof lbl, " %d %s", ti + 1, base);
-                    SetTextColor(g_srv.cdc, act
-                        ? (w->focused ? RGB(12, 14, 20) : RGB(225, 225, 235))
-                        : RGB(150, 150, 165));
-                    RECT tr = { tx + 4, iy, tx + twid - 4, iy + g_srv.title_h };
-                    DrawTextA(g_srv.cdc, lbl, -1, &tr,
-                              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-                }
-            } else {
-                RECT tb = { ix, iy, ix + iw, iy + g_srv.title_h };
-                COLORREF tc = w->focused ? BORDER_FOCUS : RGB(44, 44, 52);
+    /* barra de ABAS do terminal (i3-ish); barra de titulo simples p/ apps */
+    if (g_srv.title_h > 0 && iw > 0) {
+        SelectObject(g_srv.cdc, g_srv.font);
+        SetBkMode(g_srv.cdc, TRANSPARENT);
+        if (w->kind == WK_TERM && w->ntabs > 0) {
+            int tw = iw / w->ntabs;
+            if (tw < 1) tw = 1;
+            for (int ti = 0; ti < w->ntabs; ti++) {
+                int tx = ix + ti * tw;
+                int twid = (ti == w->ntabs - 1) ? (ix + iw - tx) : tw;
+                int act = (ti == w->active_tab);
+                RECT tb = { tx, iy, tx + twid, iy + g_srv.title_h };
+                COLORREF tc = act ? (w->focused ? BORDER_FOCUS : RGB(70, 70, 84))
+                                  : RGB(30, 30, 38);
                 HBRUSH tbb = CreateSolidBrush(tc);
                 FillRect(g_srv.cdc, &tb, tbb);
                 DeleteObject(tbb);
-                SetTextColor(g_srv.cdc, w->focused ? RGB(12, 14, 20)
-                                                   : RGB(180, 180, 195));
-                const char *base = w->title[0] ? w->title : "app";
-                RECT tr = { ix + 6, iy, ix + iw - 6, iy + g_srv.title_h };
-                DrawTextA(g_srv.cdc, base, -1, &tr,
+                Terminal *tt = w->tabs[ti];
+                const char *base = (tt && tt->title[0]) ? tt->title : "sh";
+                char lbl[288];
+                snprintf(lbl, sizeof lbl, " %d %s", ti + 1, base);
+                SetTextColor(g_srv.cdc, act
+                    ? (w->focused ? RGB(12, 14, 20) : RGB(225, 225, 235))
+                    : RGB(150, 150, 165));
+                RECT tr = { tx + 4, iy, tx + twid - 4, iy + g_srv.title_h };
+                DrawTextA(g_srv.cdc, lbl, -1, &tr,
                           DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
             }
-        }
-
-        /* conteudo (terminal/app) abaixo da barra de titulo, SEMPRE clipado a
-         * area cliente: uma surface de app maior que o tile nao pode invadir a
-         * janela vizinha nem sobrar fundo de borda (#49) */
-        int ih = (w->rect.bottom - w->rect.top) - 2 * w->border_px - g_srv.title_h;
-        int bw = w->cw < iw ? w->cw : iw;
-        int bh = w->ch < ih ? w->ch : ih;
-        if (bw > 0 && bh > 0) {
-            if (w->kind == WK_TERM)          /* glass: terminal translucido */
-                blit_glass(w->memdc, w->bits, w->cw, ix, iy + g_srv.title_h, bw, bh);
-            else                              /* app: superficie opaca */
-                BitBlt(g_srv.cdc, ix, iy + g_srv.title_h, bw, bh, w->memdc, 0, 0, SRCCOPY);
+        } else {
+            RECT tb = { ix, iy, ix + iw, iy + g_srv.title_h };
+            COLORREF tc = w->focused ? BORDER_FOCUS : RGB(44, 44, 52);
+            HBRUSH tbb = CreateSolidBrush(tc);
+            FillRect(g_srv.cdc, &tb, tbb);
+            DeleteObject(tbb);
+            SetTextColor(g_srv.cdc, w->focused ? RGB(12, 14, 20)
+                                               : RGB(180, 180, 195));
+            const char *base = w->title[0] ? w->title : "app";
+            RECT tr = { ix + 6, iy, ix + iw - 6, iy + g_srv.title_h };
+            DrawTextA(g_srv.cdc, base, -1, &tr,
+                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         }
     }
 
-    draw_bar();
+    /* conteudo (terminal/app) abaixo da barra de titulo, SEMPRE clipado a
+     * area cliente: uma surface de app maior que o tile nao pode invadir a
+     * janela vizinha nem sobrar fundo de borda (#49) */
+    int ih = (w->rect.bottom - w->rect.top) - 2 * w->border_px - g_srv.title_h;
+    int bw = w->cw < iw ? w->cw : iw;
+    int bh = w->ch < ih ? w->ch : ih;
+    if (bw > 0 && bh > 0) {
+        if (w->kind == WK_TERM)          /* glass: terminal translucido */
+            blit_glass(w->memdc, w->bits, w->cw, ix, iy + g_srv.title_h, bw, bh, clip);
+        else                              /* app: superficie opaca (GDI clipa) */
+            BitBlt(g_srv.cdc, ix, iy + g_srv.title_h, bw, bh, w->memdc, 0, 0, SRCCOPY);
+    }
+}
 
+/* recompoe uma regiao do quadro: wallpaper + janelas que cruzam `r` (em ordem z)
+ * + barra, tudo clipado a `r`. Base do damage tracking. */
+static void compose_region(const RECT *r)
+{
+    draw_wallpaper_rect(r->left, r->top, r->right, r->bottom);
+
+    HRGN rgn = CreateRectRgn(r->left, r->top, r->right, r->bottom);
+    SelectClipRgn(g_srv.cdc, rgn);
+
+    Window *vis[256];
+    int nv = collect_visible(vis, 256);
+    for (int i = 0; i < nv; i++)
+        if (rects_hit(&vis[i]->rect, r))
+            compose_one_window(vis[i], r);
+
+    RECT bar = { 0, 0, g_srv.scr_w, g_srv.bar_h };
+    if (g_srv.bar_h > 0 && rects_hit(&bar, r))
+        draw_bar();
+
+    SelectClipRgn(g_srv.cdc, NULL);
+    DeleteObject(rgn);
+}
+
+/* apresenta o quadro; sub != NULL -> so o sub-retangulo (damage) */
+static void present_frame(const RECT *sub)
+{
+    if (sub) {
+        g_srv.frame.dirty_x = sub->left;
+        g_srv.frame.dirty_y = sub->top;
+        g_srv.frame.dirty_w = sub->right - sub->left;
+        g_srv.frame.dirty_h = sub->bottom - sub->top;
+    } else {
+        g_srv.frame.dirty_w = 0;   /* quadro inteiro */
+    }
     if (g_srv.present)
         g_srv.present->present(g_srv.present, &g_srv.frame);
+}
+
+void compose_and_present(void)
+{
+    /* propaga titulos de todas as visiveis (eventos independem do damage) */
+    for (Window *w = g_srv.windows; w; w = w->next)
+        if (w->visible && w->ws == g_srv.cur_ws)
+            pump_title(w);
+
+    /* recompose TOTAL: qualquer mudanca estrutural (layout/foco/criar/destruir/
+     * app-commit) seta g_srv.dirty -> repinta a tela inteira (fallback seguro). */
+    if (g_srv.dirty || !damage_enabled()) {
+        RECT full = { 0, 0, g_srv.scr_w, g_srv.scr_h };
+        compose_region(&full);
+        present_frame(NULL);
+        g_srv.dirty = 0;
+        g_srv.bar_dirty = 0;
+        return;
+    }
+
+    /* INCREMENTAL: so os terminais que produziram saida (term->dirty) + a barra
+     * (relogio/titulo) quando marcada. Cada regiao recompoe e apresenta so o seu
+     * retangulo — o resto do backbuffer persiste do quadro anterior. */
+    RECT dmg[258];
+    int nd = 0;
+    for (Window *w = g_srv.windows; w && nd < 256; w = w->next)
+        if (w->visible && w->ws == g_srv.cur_ws &&
+            w->kind == WK_TERM && w->term && w->term->dirty)
+            dmg[nd++] = w->rect;
+    if (g_srv.bar_dirty && g_srv.bar_h > 0) {
+        RECT bar = { 0, 0, g_srv.scr_w, g_srv.bar_h };
+        dmg[nd++] = bar;
+    }
+    if (nd == 0)
+        return;
+    for (int i = 0; i < nd; i++) {
+        compose_region(&dmg[i]);
+        present_frame(&dmg[i]);
+    }
+    g_srv.bar_dirty = 0;
 }

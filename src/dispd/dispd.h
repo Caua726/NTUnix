@@ -72,7 +72,8 @@ typedef struct Server {
 
     int       bar_h;       /* altura da barra de status no topo */
     int       title_h;     /* altura da barra de titulo por janela (0=off) */
-    int       dirty;       /* precisa recompor+apresentar neste tick */
+    int       dirty;       /* recompoe A TELA TODA neste tick (mudanca estrutural) */
+    int       bar_dirty;   /* so a barra de status mudou (relogio/titulo) */
     int       in_frame;    /* dentro de FRAME-BEGIN..COMMIT (nao apresenta) */
     int       debug;       /* DISPD_DEBUG=1: diagnosticos na tela/log */
     int       ffm;         /* focus-follows-mouse (DISPD_FFM=1) */

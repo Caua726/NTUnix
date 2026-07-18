@@ -28,7 +28,11 @@ static void gdi_present(PresentBackend *b, const Frame *f)
     GdiImpl *g = (GdiImpl *)b->impl;
     if (!g->rootdc)
         return;
-    BitBlt(g->rootdc, 0, 0, f->w, f->h, f->memdc, 0, 0, SRCCOPY);
+    if (f->dirty_w > 0 && f->dirty_h > 0)   /* damage: so o sub-retangulo */
+        BitBlt(g->rootdc, f->dirty_x, f->dirty_y, f->dirty_w, f->dirty_h,
+               f->memdc, f->dirty_x, f->dirty_y, SRCCOPY);
+    else
+        BitBlt(g->rootdc, 0, 0, f->w, f->h, f->memdc, 0, 0, SRCCOPY);
 }
 
 static int gdi_resize(PresentBackend *b, int w, int h)
