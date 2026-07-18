@@ -38,6 +38,16 @@ static BOOL CALLBACK initialize_table(PINIT_ONCE once, PVOID parameter,
         fd_table[i].kind = kind_for_handle(fd_table[i].handle);
         fd_table[i].flags = i ? NT_O_WRONLY : NT_O_RDONLY;
     }
+    /* pty nativo: quando o pai (dispd) marca NTU_PTY, os std handles sao pipes
+     * do master do pty — tratamos como tty (isatty/termios em memoria), nao
+     * como pipe cru. Assim o ash entra em modo interativo sem ConPTY. */
+    {
+        char v[8];
+        if (GetEnvironmentVariableA("NTU_PTY", v, sizeof v) > 0)
+            for (i = 0; i < 3; ++i)
+                if (fd_table[i].kind == NT_FD_PIPE)
+                    fd_table[i].kind = NT_FD_PTY;
+    }
     return TRUE;
 }
 

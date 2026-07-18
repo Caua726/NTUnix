@@ -44,9 +44,60 @@ struct nt_termios {
 #define NT_VTIME  5
 #define NT_VMIN   6
 
+/* ---- pty slave (sem ConPTY): termios em memoria + winsize via file-mapping
+ * compartilhado com o master (dispd). Um pty por processo (o tty controlador). */
+static struct nt_termios g_pty_tio;
+static int g_pty_tio_ready;
+static volatile unsigned short *g_pty_ws;   /* view do mapping: [0]=cols [1]=rows */
+
+static void pty_tio_ensure(void)
+{
+    if (g_pty_tio_ready)
+        return;
+    nt_memset(&g_pty_tio, 0, sizeof g_pty_tio);
+    g_pty_tio.c_iflag = NT_ICRNL | NT_IXON;
+    g_pty_tio.c_oflag = NT_OPOST | NT_ONLCR;
+    g_pty_tio.c_cflag = NT_CS8 | NT_CREAD | NT_CLOCAL;
+    g_pty_tio.c_lflag = NT_ISIG | NT_ICANON | NT_ECHO | NT_IEXTEN;
+    g_pty_tio.c_cc[NT_VINTR]  = 3;
+    g_pty_tio.c_cc[NT_VEOF]   = 4;
+    g_pty_tio.c_cc[NT_VERASE] = 0x7f;
+    g_pty_tio.c_cc[NT_VMIN]   = 1;
+    g_pty_tio.c_cc[NT_VTIME]  = 0;
+    g_pty_tio_ready = 1;
+}
+
+static void pty_winsize(unsigned short *cols, unsigned short *rows)
+{
+    if (!g_pty_ws) {
+        char name[64];
+        if (GetEnvironmentVariableA("NTU_PTY_WS", name, sizeof name) > 0) {
+            HANDLE m = OpenFileMappingA(FILE_MAP_READ, FALSE, name);
+            if (m)   /* a view sobrevive ao close; mantemos pela vida do processo */
+                g_pty_ws = (volatile unsigned short *)
+                    MapViewOfFile(m, FILE_MAP_READ, 0, 0, 4);
+        }
+    }
+    unsigned short c = g_pty_ws ? g_pty_ws[0] : 0;
+    unsigned short r = g_pty_ws ? g_pty_ws[1] : 0;
+    *cols = c ? c : 80;
+    *rows = r ? r : 24;
+}
+
+int nt_pty_onlcr(void)
+{
+    pty_tio_ensure();
+    return (g_pty_tio.c_oflag & NT_OPOST) && (g_pty_tio.c_oflag & NT_ONLCR);
+}
+
 static nt_sc_t termios_get(struct nt_fd *slot, struct nt_termios *tio)
 {
     DWORD mode;
+    if (slot->kind == NT_FD_PTY) {           /* pty: estado em memoria */
+        pty_tio_ensure();
+        *tio = g_pty_tio;
+        return 0;
+    }
     if (slot->kind != NT_FD_CONSOLE || !GetConsoleMode(slot->handle, &mode))
         return -NT_ENOTTY;
     nt_memset(tio, 0, sizeof *tio);
@@ -70,6 +121,11 @@ static nt_sc_t termios_get(struct nt_fd *slot, struct nt_termios *tio)
 static nt_sc_t termios_set(struct nt_fd *slot, const struct nt_termios *tio)
 {
     DWORD mode;
+    if (slot->kind == NT_FD_PTY) {           /* pty: guarda o estado em memoria */
+        pty_tio_ensure();
+        g_pty_tio = *tio;
+        return 0;
+    }
     if (slot->kind != NT_FD_CONSOLE || !GetConsoleMode(slot->handle, &mode))
         return -NT_ENOTTY;
     /* preserva os bits que não gerencio; reaplica a disciplina de linha */
@@ -97,6 +153,15 @@ nt_sc_t nt_sys_ioctl(nt_sc_t fd, nt_sc_t request, nt_sc_t arg)
         struct nt_winsize *winsize = (void *)(uintptr_t)arg;
         CONSOLE_SCREEN_BUFFER_INFO info;
         if (!winsize) return -NT_EFAULT;
+        if (slot->kind == NT_FD_PTY) {       /* pty: winsize do mapping do master */
+            unsigned short c, r;
+            pty_winsize(&c, &r);
+            winsize->ws_col = c;
+            winsize->ws_row = r;
+            winsize->ws_xpixel = 0;
+            winsize->ws_ypixel = 0;
+            return 0;                         /* sucesso -> isatty() = true */
+        }
         if (slot->kind != NT_FD_CONSOLE ||
             !GetConsoleScreenBufferInfo(slot->handle, &info))
             return -NT_ENOTTY;
@@ -107,7 +172,8 @@ nt_sc_t nt_sys_ioctl(nt_sc_t fd, nt_sc_t request, nt_sc_t arg)
         return 0;
     }
     if (request == NT_TIOCSWINSZ)
-        return slot->kind == NT_FD_CONSOLE ? 0 : -NT_ENOTTY;
+        return (slot->kind == NT_FD_CONSOLE || slot->kind == NT_FD_PTY)
+                   ? 0 : -NT_ENOTTY;
     if (request == NT_TCGETS) {
         struct nt_termios *tio = (void *)(uintptr_t)arg;
         if (!tio) return -NT_EFAULT;
@@ -122,7 +188,7 @@ nt_sc_t nt_sys_ioctl(nt_sc_t fd, nt_sc_t request, nt_sc_t arg)
         int *available_out = (void *)(uintptr_t)arg;
         DWORD available = 0;
         if (!available_out) return -NT_EFAULT;
-        if (slot->kind == NT_FD_PIPE) {
+        if (slot->kind == NT_FD_PIPE || slot->kind == NT_FD_PTY) {
             if (!PeekNamedPipe(slot->handle, 0, 0, 0, &available, 0))
                 return nt_last_error();
         } else if (slot->kind == NT_FD_CONSOLE) {

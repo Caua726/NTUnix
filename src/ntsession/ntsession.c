@@ -22,6 +22,16 @@ static BOOL initd_up(void)
     return TRUE;
 }
 
+static BOOL dispd_up(void)
+{
+    HANDLE h = CreateFileA(NTU_PIPE_DISPD, GENERIC_READ | GENERIC_WRITE,
+                           0, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE)
+        return GetLastError() == ERROR_PIPE_BUSY; /* ocupado = vivo */
+    CloseHandle(h);
+    return TRUE;
+}
+
 static BOOL spawn(const char *cmdline, DWORD flags, PROCESS_INFORMATION *pi)
 {
     STARTUPINFOA si;
@@ -61,21 +71,35 @@ int main(void)
             Sleep(100);
     }
 
-    /* terminal da sessao: abre o shell Unix (ash). Via cmd /K para que, se o
-     * ash sair ou falhar, a sessao caia num cmd em vez de morrer. */
+    /* Sessao grafica: o desktop (dispd + ntwm) sobe pelo initd, pois as units
+     * estao habilitadas. O ntsession CEDE a tela: so vigia. Se o dispd nao
+     * subir, cai num terminal de recuperacao para a sessao nunca ficar sem
+     * shell (via cmd /K, que sobrevive a saida do ash). */
     char term[MAX_PATH + 128];
     snprintf(term, sizeof term,
-             "cmd.exe /K \"cd /d %s && title NTUnix %s && system\\bin\\busybox.exe ash -i\"",
+             "cmd.exe /K \"cd /d %s && title NTUnix %s (recuperacao) && system\\bin\\busybox.exe ash -i\"",
              ntu_root(), NTU_VERSION);
+
     for (;;) {
-        PROCESS_INFORMATION pi;
-        if (!spawn(term, CREATE_NEW_CONSOLE, &pi)) {
-            Sleep(3000);
-            continue;
+        /* espera o desktop (ate ~15s apos o boot / restart) */
+        BOOL up = FALSE;
+        for (int i = 0; i < 150 && !up; i++) {
+            if (dispd_up()) up = TRUE;
+            else Sleep(100);
         }
-        WaitForSingleObject(pi.hProcess, INFINITE);
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
+        if (up) {
+            /* desktop no ar: idle enquanto viver (initd reinicia o dispd) */
+            while (dispd_up())
+                Sleep(1000);
+            continue;   /* caiu: reavalia (pode voltar via initd) */
+        }
+        /* recuperacao: dispd nao subiu -> terminal ate ele voltar */
+        PROCESS_INFORMATION pi;
+        if (spawn(term, CREATE_NEW_CONSOLE, &pi)) {
+            WaitForSingleObject(pi.hProcess, INFINITE);
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+        }
         Sleep(500);
     }
 }
