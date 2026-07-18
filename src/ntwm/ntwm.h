@@ -49,7 +49,7 @@ void    zoom(void);
 void    killfocused(void);
 void    togglefloating(void);
 
-/* config.c */
+/* ntwm.c (load_config + cfg_kv) — audit #122: nao existe config.c separado */
 void    load_config(void);
 
 #endif

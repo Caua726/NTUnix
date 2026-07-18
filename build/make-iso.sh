@@ -70,7 +70,16 @@ rm -rf "$STAGE"; mkdir -p "$STAGE/NTUnix" \
     "$STAGE/Windows/Setup/Scripts" "$STAGE/Windows/Panther/Unattend"
 cp -a "$REPO/out/." "$STAGE/NTUnix/"
 cp "$REPO/build/SetupComplete.cmd" "$STAGE/Windows/Setup/Scripts/SetupComplete.cmd"
-cp "$REPO/build/autounattend.xml"  "$STAGE/Windows/Panther/Unattend/unattend.xml"
+
+# audit #119: a senha do usuario 'ntunix' vem da variavel de build NTUNIX_PASSWORD
+# (nao mais hardcoded no XML). Sem ela, cai no default 'ntunix' com AVISO alto.
+NTUNIX_PW="${NTUNIX_PASSWORD:-ntunix}"
+if [ "$NTUNIX_PW" = ntunix ]; then
+    step "AVISO seguranca: usando senha padrao 'ntunix' — defina NTUNIX_PASSWORD=<senha> no build"
+fi
+UNATTEND="$WORK/unattend.rendered.xml"
+sed "s|@NTUNIX_PW@|$NTUNIX_PW|g" "$REPO/build/autounattend.xml" > "$UNATTEND"
+cp "$UNATTEND" "$STAGE/Windows/Panther/Unattend/unattend.xml"
 
 # lista de deletes a partir do strip.list
 mapfile -t DEL < <(grep -vE '^\s*(#|$)' "$REPO/build/strip.list")
@@ -93,7 +102,7 @@ for idx in $EDITIONS; do
 done
 
 # autounattend.xml na raiz da ISO (Setup le automaticamente do boot media)
-cp "$REPO/build/autounattend.xml" "$IMG/autounattend.xml"
+cp "$UNATTEND" "$IMG/autounattend.xml"   # renderizado com a senha do build (#119)
 
 # --- 6. reempacotar ISO hibrida bootavel ----------------------------------
 step "localizando arquivos de boot"

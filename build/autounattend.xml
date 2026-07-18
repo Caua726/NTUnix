@@ -22,19 +22,26 @@
         <SkipMachineOOBE>true</SkipMachineOOBE>
         <SkipUserOOBE>true</SkipUserOOBE>
       </OOBE>
+      <!--
+        audit #119: a senha NAO e' mais hardcoded — o make-iso.sh substitui
+        @NTUNIX_PW@ pela variavel NTUNIX_PASSWORD do build (default 'ntunix' com
+        AVISO). Admin + AutoLogon sao escolhas DELIBERADAS de appliance de dev
+        (boota direto no desktop). Para endurecer: troque <Group> p/ 'Users' e
+        remova o bloco <AutoLogon> (o Windows pedira senha no boot).
+      -->
       <UserAccounts>
         <LocalAccounts>
           <LocalAccount wcm:action="add">
             <Name>ntunix</Name>
             <Group>Administrators</Group>
-            <Password><Value>ntunix</Value><PlainText>true</PlainText></Password>
+            <Password><Value>@NTUNIX_PW@</Value><PlainText>true</PlainText></Password>
           </LocalAccount>
         </LocalAccounts>
       </UserAccounts>
       <AutoLogon>
         <Enabled>true</Enabled>
         <Username>ntunix</Username>
-        <Password><Value>ntunix</Value><PlainText>true</PlainText></Password>
+        <Password><Value>@NTUNIX_PW@</Value><PlainText>true</PlainText></Password>
         <LogonCount>2147483647</LogonCount>
       </AutoLogon>
     </component>
@@ -47,6 +54,9 @@
                language="neutral" versionScope="nonSxS"
                xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
       <RunSynchronous>
+        <!-- audit #120: bypass de TPM/SecureBoot/RAM e' uma escolha EXPLICITA para
+             rodar em VM/hardware nao suportado. Para EXIGIR os requisitos do Win11
+             (instalar so em maquina compativel), remova este bloco <RunSynchronous>. -->
         <!-- desabilita a checagem de TPM/SecureBoot/RAM do Win11 setup -->
         <RunSynchronousCommand wcm:action="add">
           <Order>1</Order>

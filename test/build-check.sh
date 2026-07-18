@@ -44,8 +44,9 @@ if have xmllint; then
 else skip "xmllint ausente (pacote libxml2)"; fi
 
 echo "== strip.list nao remove itens perigosos =="
-if grep -iqE 'SystemApps|WebView2|Defender' build/strip.list \
-     | grep -v '^#' >/dev/null 2>&1; then
+# audit #121: filtra comentarios ANTES de procurar (o `grep -q | grep` antigo nao
+# emitia nada no 1o grep, entao o 2o sempre falhava e o check sempre "passava")
+if grep -vE '^\s*#' build/strip.list | grep -iqE 'SystemApps|WebView2|Defender'; then
     bad "strip.list contem item perigoso fora de comentario"
 else ok "strip.list conservador (sem SystemApps/WebView2/Defender ativos)"; fi
 
