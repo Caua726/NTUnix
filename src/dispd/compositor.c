@@ -485,6 +485,64 @@ static void blur_bg(unsigned char *dst, int stride, int x0, int y0, int x1, int 
     }
 }
 
+/* cor do wallpaper (gradiente vertical) na linha y, em BGR */
+static void wallpaper_bgr(int y, int H, unsigned char *bgr)
+{
+    int tt = H > 1 ? (y * 255 / (H - 1)) : 0;
+    bgr[0] = (unsigned char)(30 + (56 - 30) * tt / 255);
+    bgr[1] = (unsigned char)(20 + (26 - 20) * tt / 255);
+    bgr[2] = (unsigned char)(20 + (40 - 20) * tt / 255);
+}
+
+/* raio dos cantos arredondados; DISPD_ROUND=0 desliga (default 8) */
+static int corner_radius(void)
+{
+    static int r = -1;
+    if (r < 0) {
+        char v[8] = "";
+        GetEnvironmentVariableA("DISPD_ROUND", v, sizeof v);
+        if (v[0]) { r = atoi(v); if (r < 0) r = 0; if (r > 32) r = 32; }
+        else r = 8;
+    }
+    return r;
+}
+
+/* arredonda os 4 cantos da janela `outer`: os pixels do canto fora do arco de
+ * raio `radius` viram wallpaper (recorta a moldura retangular). Limitado a clip. */
+static void round_corners(const RECT *outer, int radius, const RECT *clip)
+{
+    if (radius < 1)
+        return;
+    unsigned char *p = (unsigned char *)g_srv.cbits;
+    if (!p)
+        return;
+    int W = g_srv.scr_w, H = g_srv.scr_h, stride = g_srv.frame.stride, r2 = radius * radius;
+    struct { int bx, by, cx, cy; } cn[4] = {
+        { outer->left,           outer->top,            outer->left + radius,   outer->top + radius },
+        { outer->right - radius, outer->top,            outer->right - radius,  outer->top + radius },
+        { outer->left,           outer->bottom - radius, outer->left + radius,   outer->bottom - radius },
+        { outer->right - radius, outer->bottom - radius, outer->right - radius,  outer->bottom - radius },
+    };
+    for (int k = 0; k < 4; k++) {
+        for (int y = cn[k].by; y < cn[k].by + radius; y++) {
+            if (y < 0 || y >= H) continue;
+            if (clip && (y < clip->top || y >= clip->bottom)) continue;
+            unsigned char bgr[3];
+            wallpaper_bgr(y, H, bgr);
+            unsigned char *row = p + (size_t)y * stride;
+            for (int x = cn[k].bx; x < cn[k].bx + radius; x++) {
+                if (x < 0 || x >= W) continue;
+                if (clip && (x < clip->left || x >= clip->right)) continue;
+                int dxp = x - cn[k].cx, dyp = y - cn[k].cy;
+                if (dxp * dxp + dyp * dyp > r2) {   /* fora do arco -> wallpaper */
+                    unsigned char *d = row + x * 4;
+                    d[0] = bgr[0]; d[1] = bgr[1]; d[2] = bgr[2]; d[3] = 255;
+                }
+            }
+        }
+    }
+}
+
 /* damage tracking (deep-compositors §0.1: "sem damage voce redesenha a tela
  * inteira todo frame — inaceitavel no software"). DISPD_DAMAGE=0 desliga (volta
  * ao recompose-tela-cheia). So no backend GDI — o flip DXGI apresenta o buffer
@@ -691,6 +749,13 @@ static void compose_one_window(Window *w, const RECT *clip)
             blit_glass(w->memdc, w->bits, w->cw, ix, iy + g_srv.title_h, bw, bh, clip);
         else                              /* app: superficie opaca (GDI clipa) */
             BitBlt(g_srv.cdc, ix, iy + g_srv.title_h, bw, bh, w->memdc, 0, 0, SRCCOPY);
+    }
+
+    /* cantos arredondados: recorta a moldura DEPOIS de tudo desenhado (garante
+     * que o GDI da borda chegou ao DIB antes de sobrescrever os cantos) */
+    if (corner_radius() > 0) {
+        GdiFlush();
+        round_corners(&w->rect, corner_radius(), clip);
     }
 }
 
