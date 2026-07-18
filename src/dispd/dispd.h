@@ -13,7 +13,7 @@
 #include "present.h"
 #include "term.h"
 
-typedef enum { WK_TERM = 0, WK_APP = 1 } WinKind;
+typedef enum { WK_TERM = 0, WK_APP = 1, WK_FOREIGN = 2 } WinKind;
 
 typedef struct Window {
     unsigned  id;
@@ -43,6 +43,8 @@ typedef struct Window {
     int       active_tab;
 
     HANDLE    section;     /* kind==WK_APP: section compartilhada com o app */
+    HWND      hwnd;        /* kind==WK_FOREIGN: a janela do Windows gerenciada */
+    LONG_PTR  orig_style;  /* estilo original (p/ restaurar ao soltar) */
     struct Window *next;
 } Window;
 #define MAX_TABS 16
@@ -123,8 +125,17 @@ void     appsrv_close_wid(unsigned id);            /* fecha a conexao do app */
 void     appsrv_input_key(unsigned id, unsigned mods, unsigned vk, unsigned ch, int down);
 void     appsrv_input_mouse(unsigned id, int x, int y, int buttons);
 
+/* foreign.c — gerencia janelas nativas do Windows (taskmgr, notepad, browser…)
+ * como WK_FOREIGN: descobre via WinEventHook, tila via SetWindowPos (modelo
+ * komorebi/GlazeWM). Rodam em win32k; a gente e' o WM, nao o compositor delas. */
+void     foreign_init(void);          /* instala hooks + varre janelas abertas */
+void     foreign_place(Window *w, int x, int y, int cw, int ch);  /* SetWindowPos */
+void     foreign_focus(Window *w);    /* SetForegroundWindow */
+void     foreign_release(Window *w);  /* restaura o estilo (ao deixar de gerenciar) */
+
 /* dispd.c */
 Window  *spawn_terminal(const char *cmdline);  /* cria janela WK_TERM + 1a aba */
+Window  *win_create_foreign(HWND hwnd);        /* WK_FOREIGN (sem DIB) */
 void     dispd_close_window(Window *w);        /* fecha janela + conexao do app (#54) */
 void     dispd_log(const char *fmt, ...);
 

@@ -264,8 +264,12 @@ static void apply_now(char *line)
             w->rect.right = (int)(x + ww); w->rect.bottom = (int)(y + hh);
             w->ws = ws;
             w->z = atoi(av[7]);
-            int bp = w->border_px * 2;
-            win_set_client_size(w, (int)ww - bp, (int)hh - bp - g_srv.title_h);
+            int b = w->border_px;
+            if (w->kind == WK_FOREIGN)      /* posiciona o HWND real, inset na chrome */
+                foreign_place(w, (int)x + b, (int)y + b + g_srv.title_h,
+                              (int)ww - 2 * b, (int)hh - 2 * b - g_srv.title_h);
+            else
+                win_set_client_size(w, (int)ww - 2 * b, (int)hh - 2 * b - g_srv.title_h);
         }
     } else if (!strcmp(v, CMD_FOCUS) && n >= 2) {
         win_focus(win_find((unsigned)strtoul(av[1], NULL, 10)));  /* 0 -> NULL */

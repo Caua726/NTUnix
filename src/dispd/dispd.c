@@ -335,7 +335,10 @@ static HWND make_root(void)
     wc.lpszClassName = "ntudispd";
     RegisterClassA(&wc);
 
-    return CreateWindowExA(WS_EX_TOPMOST, "ntudispd", "",
+    /* area de trabalho: NAO topmost (janelas WK_FOREIGN ficam acima) e
+     * NOACTIVATE (clicar num terminal nao traz o dispd pra frente cobrindo as
+     * estrangeiras). O teclado vem do hook LL global, independe de foco. */
+    return CreateWindowExA(WS_EX_NOACTIVATE, "ntudispd", "",
                            WS_POPUP | WS_VISIBLE,
                            0, 0, g_srv.scr_w, g_srv.scr_h,
                            NULL, NULL, GetModuleHandleA(NULL), NULL);
@@ -414,6 +417,7 @@ int main(void)
         input_install_hook();   /* teclado global, independe de foco */
         wmproto_start();
         appsrv_start();
+        foreign_init();         /* WM das janelas nativas do Windows (WK_FOREIGN) */
         spawn_terminal(NULL);   /* algo na tela ja no boot */
     }
 

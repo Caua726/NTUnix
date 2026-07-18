@@ -170,6 +170,26 @@ Window *win_create_shared(int cw, int ch, HANDLE section)
     return w;
 }
 
+/* WK_FOREIGN: janela nativa do Windows que a gente gerencia (sem DIB nosso —
+ * o win32k desenha; so cuidamos da geometria/foco/borda) */
+Window *win_create_foreign(HWND hwnd)
+{
+    Window *w = (Window *)calloc(1, sizeof *w);
+    if (!w)
+        return NULL;
+    w->id = ++g_srv.next_id;
+    w->kind = WK_FOREIGN;
+    w->ws = g_srv.cur_ws;
+    w->visible = 1;
+    w->border_px = 2;
+    w->border_rgb = BORDER_NORMAL;
+    w->hwnd = hwnd;
+    w->next = g_srv.windows;
+    g_srv.windows = w;
+    g_srv.dirty = 1;
+    return w;
+}
+
 void win_destroy(Window *w)
 {
     if (!w)
@@ -189,6 +209,8 @@ void win_destroy(Window *w)
         term_destroy(w->tabs[i]);
     w->ntabs = 0;
     w->term = NULL;
+    if (w->kind == WK_FOREIGN)
+        foreign_release(w);   /* restaura o estilo da janela do Windows */
     free_dib(w->memdc, w->dib);
     if (w->section)
         CloseHandle(w->section);
@@ -253,6 +275,8 @@ void win_focus(Window *w)
     if (w) {
         w->focused = 1;
         g_srv.focused = w;
+        if (w->kind == WK_FOREIGN)
+            foreign_focus(w);   /* traz a janela do Windows pra frente */
     } else {
         g_srv.focused = NULL;   /* #7: limpa o ponteiro tambem */
     }
