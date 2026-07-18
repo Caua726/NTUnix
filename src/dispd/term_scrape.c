@@ -132,8 +132,8 @@ static int scrape_start(Terminal *t, const char *cmdline, int cols, int rows)
     s->conin = CreateFileA("CONIN$", GENERIC_READ | GENERIC_WRITE,
                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                            OPEN_EXISTING, 0, NULL);
-    if (s->conout == INVALID_HANDLE_VALUE)
-        goto fail;
+    if (s->conout == INVALID_HANDLE_VALUE || s->conin == INVALID_HANDLE_VALUE)
+        goto fail;   /* audit #101: CONIN$ tambem tem que abrir (senao sem teclado) */
 
     /* filho herda o nosso console (sem CREATE_NEW_CONSOLE) */
     STARTUPINFOA si;
