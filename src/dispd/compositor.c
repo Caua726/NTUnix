@@ -276,6 +276,10 @@ void win_focus(Window *w)
      * o teclado iria pra uma janela que o usuario nao ve. Foco nulo nesse caso. */
     if (w && (!w->visible || w->ws != g_srv.cur_ws))
         w = NULL;
+    if (g_srv.focused != w) {   /* #35: anima a transicao de borda (foco muda) */
+        if (g_srv.focused) g_srv.focused->focus_ms = GetTickCount64();
+        if (w) w->focus_ms = GetTickCount64();
+    }
     for (Window *o = g_srv.windows; o; o = o->next)
         o->focused = 0;
     if (w) {
@@ -533,12 +537,33 @@ static int win_anim_alpha(Window *w)
     return 255 - (int)((long long)u * u * u / (255 * 255));  /* 1-(1-t)^3 */
 }
 
+static COLORREF lerp_rgb(COLORREF a, COLORREF b, int t /*0..255*/)
+{
+    int ar = GetRValue(a), ag = GetGValue(a), ab = GetBValue(a);
+    int br = GetRValue(b), bg = GetGValue(b), bb = GetBValue(b);
+    return RGB(ar + (br - ar) * t / 255, ag + (bg - ag) * t / 255, ab + (bb - ab) * t / 255);
+}
+
+/* cor da borda com transicao de foco (#35): lerp entre a borda normal e a de
+ * foco durante FOCUS_ANIM_MS apos a mudanca. Zera focus_ms ao terminar. */
+#define FOCUS_ANIM_MS 120
+static COLORREF border_color(Window *w)
+{
+    COLORREF target = w->focused ? BORDER_FOCUS : w->border_rgb;
+    if (!anim_enabled() || w->focus_ms == 0)
+        return target;
+    ULONGLONG el = GetTickCount64() - w->focus_ms;
+    if (el >= FOCUS_ANIM_MS) { w->focus_ms = 0; return target; }
+    COLORREF from = w->focused ? w->border_rgb : BORDER_FOCUS;
+    return lerp_rgb(from, target, (int)(el * 255 / FOCUS_ANIM_MS));
+}
+
 int compositor_animating(void)
 {
     if (!anim_enabled())
         return 0;
     for (Window *w = g_srv.windows; w; w = w->next)
-        if (w->anim_ms != 0)
+        if (w->anim_ms != 0 || w->focus_ms != 0)
             return 1;
     return 0;
 }
@@ -706,7 +731,7 @@ static void compose_one_window(Window *w, const RECT *clip)
 
     /* borda: MOLDURA (nao preenche o miolo -> o wallpaper aparece sob o
      * glass do terminal). foco = destaque */
-    COLORREF bc = w->focused ? BORDER_FOCUS : w->border_rgb;
+    COLORREF bc = border_color(w);   /* #35: lerp na transicao de foco */
     HBRUSH bb = CreateSolidBrush(bc);
     int bp = w->border_px;
     RECT edges[4] = {

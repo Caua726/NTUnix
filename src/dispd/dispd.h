@@ -47,6 +47,7 @@ typedef struct Window {
     LONG_PTR  orig_style;  /* estilo original (p/ restaurar ao soltar) */
     RECT      fg_target;   /* kind==WK_FOREIGN: onde a janela DEVE ficar (re-snap) */
     ULONGLONG anim_ms;     /* inicio da animacao de aparecer (0 = nenhuma/pronta) */
+    ULONGLONG focus_ms;    /* inicio da transicao de foco da borda (#35) */
     struct Window *next;
 } Window;
 #define MAX_TABS 16
