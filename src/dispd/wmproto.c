@@ -48,6 +48,7 @@ static int g_ngrabs;
 /* buffer da transacao de layout (main thread) */
 static char *g_frame[FRAMECAP];
 static int g_nframe;
+static int g_frame_failed;   /* quadro perdeu comando (overflow/OOM) -> nao commita (#44,#45) */
 static int g_buffering;
 
 static int g_hello;                    /* ja recebeu HELLO valido? (main thread) */
@@ -311,21 +312,36 @@ static void frame_clear(void)
     for (int i = 0; i < g_nframe; i++)
         free(g_frame[i]);
     g_nframe = 0;
+    g_frame_failed = 0;
 }
 
 static void frame_push(const char *line)
 {
-    if (g_nframe >= FRAMECAP) {          /* quadro grande demais: pede resync */
+    if (g_nframe >= FRAMECAP) {          /* quadro grande demais: invalida tudo */
+        g_frame_failed = 1;              /* #44: nao publica os 512 parciais */
         InterlockedExchange(&g_overflow, 1);
         return;
     }
     char *dup = _strdup(line);
-    if (dup)
-        g_frame[g_nframe++] = dup;
+    if (!dup) {
+        g_frame_failed = 1;              /* #45: OOM invalida o quadro inteiro */
+        InterlockedExchange(&g_overflow, 1);
+        return;
+    }
+    g_frame[g_nframe++] = dup;
 }
 
 static void frame_commit(void)
 {
+    /* audit #44 (critico)/#45: um quadro que perdeu QUALQUER comando (overflow
+     * do FRAMECAP ou OOM no _strdup) NAO pode ser publicado pela metade —
+     * corromperia o estado global de layout. Descarta tudo e pede RESYNC. */
+    if (g_frame_failed) {
+        dispd_log("wmproto: quadro incompleto (overflow/OOM) descartado — RESYNC");
+        frame_clear();
+        InterlockedExchange(&g_overflow, 1);   /* forca RESYNC no proximo drain */
+        return;
+    }
     for (int i = 0; i < g_nframe; i++)
         apply_now(g_frame[i]);   /* swap atomico: aplica o quadro inteiro de uma vez */
     frame_clear();
