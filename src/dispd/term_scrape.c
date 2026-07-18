@@ -93,8 +93,12 @@ static DWORD WINAPI reader_main(LPVOID arg)
     Terminal *t = (Terminal *)arg;
     Scrape *s = (Scrape *)t->impl;
     while (!s->stop) {
-        scrape_frame(t, s);
-        if (WaitForSingleObject(s->hproc, 33) == WAIT_OBJECT_0)
+        /* audit #103: oculto (outro ws/coberto) -> nao le a grade a 30Hz; so faz
+         * o poll de saida do processo (mais espacado). Economiza CPU. */
+        int vis = term_win_visible(t);
+        if (vis)
+            scrape_frame(t, s);
+        if (WaitForSingleObject(s->hproc, vis ? 33 : 200) == WAIT_OBJECT_0)
             break;
     }
     scrape_frame(t, s);   /* ultimo quadro */

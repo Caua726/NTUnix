@@ -224,6 +224,11 @@ static void selftest_frame(void)
         g_srv.present->present(g_srv.present, &g_srv.frame);
 }
 
+int term_win_visible(Terminal *t)   /* #103: backends nao enxergam Window */
+{
+    return !t || !t->win || t->win->visible;
+}
+
 static int frame_tick(void)   /* retorna 1 se apresentou um quadro */
 {
     if (g_srv.selftest) {

@@ -124,4 +124,7 @@ COLORREF vt_ansi_color(int idx);
 /* log (definido em dispd.c) — disponivel para os backends de terminal */
 void dispd_log(const char *fmt, ...);
 
+/* #103: 1 se a janela dona do terminal esta visivel (backends nao veem Window) */
+int  term_win_visible(Terminal *t);
+
 #endif
