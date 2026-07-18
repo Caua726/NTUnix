@@ -44,7 +44,14 @@ void wm_send(const char *fmt, ...)
     if (n > (int)sizeof buf - 1)
         n = (int)sizeof buf - 1;
     DWORD w;
-    WriteFile(g_pipe, buf, (DWORD)n, &w, NULL);
+    /* audit #59: buffer de 64K no server (dispd) ja evita bloqueio no caso comum;
+     * aqui, se a escrita FALHA (dispd sumiu / pipe quebrado), fecha o pipe pra o
+     * loop de leitura detectar a desconexao e o ntwm sair (initd respawna) em vez
+     * de seguir escrevendo num pipe morto. async overlapped total = follow-up. */
+    if (!WriteFile(g_pipe, buf, (DWORD)n, &w, NULL) || w != (DWORD)n) {
+        CloseHandle(g_pipe);
+        g_pipe = INVALID_HANDLE_VALUE;
+    }
 }
 
 int wm_read(char *buf, int cap)
