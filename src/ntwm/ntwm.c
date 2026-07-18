@@ -11,6 +11,7 @@
  *   Alt+j/k    foco prox/ant         Alt+h/l          master menor/maior
  *   Alt+i/d    +/- master            Alt+q            fecha o focado
  *   Alt+1..9   ve workspace          Alt+Shift+1..9   move focado p/ workspace
+ *   Alt+Shift+c  terminal cmd.exe    Alt+Shift+p      terminal powershell
  *   Alt+Shift+e  sai (initd respawna / swap)
  */
 #include "ntwm.h"
@@ -85,6 +86,8 @@ static void register_grabs(void)
     grab(M, 'I'); grab(M, 'D');
     grab(M, 'Q');
     grab(M | MOD_SHIFT, 'E');
+    grab(M | MOD_SHIFT, 'C');        /* terminal cmd.exe   (interop Windows) */
+    grab(M | MOD_SHIFT, 'P');        /* terminal powershell (interop Windows) */
     grab(M | MOD_SHIFT, VK_SPACE);   /* alterna floating */
     for (int i = 0; i < 9; i++) {
         grab(M, (unsigned)('1' + i));
@@ -114,6 +117,10 @@ static void on_key(unsigned mods, unsigned vk)
             zoom();
         else if (vk == 'E')
             exit(0);                 /* ntwm sai; initd respawna / swap */
+        else if (vk == 'C')
+            wm_send("%s cmd.exe", CMD_SPAWN);         /* console real (scrape) */
+        else if (vk == 'P')
+            wm_send("%s powershell.exe", CMD_SPAWN);  /* console real (scrape) */
         else if (vk == VK_SPACE)
             togglefloating();
         else if (vk >= '1' && vk <= '9')
