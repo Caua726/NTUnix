@@ -173,20 +173,31 @@ static void builtin_layout(void)
     }
 }
 
-/* remove terminais cujo filho morreu */
+/* remove ABAS cujo filho morreu (audit #63: antes so olhava a aba ATIVA -> uma
+ * aba morta em background nao era removida, e ativa-la destruia a janela inteira
+ * e todas as abas vivas). Fecha por aba; a ultima aba morta fecha a janela. */
 static void reap_dead(void)
 {
-    unsigned dead[64];
-    int nd = 0;
-    for (Window *w = g_srv.windows; w && nd < 64; w = w->next)
-        if (w->kind == WK_TERM && w->term && !w->term->alive)
-            dead[nd++] = w->id;
-    for (int i = 0; i < nd; i++) {
-        Window *w = win_find(dead[i]);
-        if (w) {
-            win_destroy(w);
-            wmproto_ev_destroyed(dead[i]);
-            dispd_log("terminal %u encerrado", dead[i]);
+    unsigned wids[64];
+    int nw = 0;
+    for (Window *w = g_srv.windows; w && nw < 64; w = w->next)
+        if (w->kind == WK_TERM)
+            wids[nw++] = w->id;
+    for (int k = 0; k < nw; k++) {
+        Window *w = win_find(wids[k]);
+        if (!w)
+            continue;
+        /* de tras pra frente: win_tab_close desloca as abas > idx */
+        for (int i = w->ntabs - 1; i >= 0; i--) {
+            if (i < w->ntabs && w->tabs[i] && !w->tabs[i]->alive) {
+                win_tab_close(w, i);              /* ultima aba -> fecha a janela + evento */
+                w = win_find(wids[k]);
+                if (!w) {
+                    dispd_log("terminal %u encerrado (ultima aba)", wids[k]);
+                    break;
+                }
+                dispd_log("aba morta fechada (janela %u)", wids[k]);
+            }
         }
     }
 }

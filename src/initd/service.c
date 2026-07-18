@@ -291,7 +291,17 @@ static int svc_spawn(Service *s, char *err, size_t errcap)
     s->started_at = GetTickCount64();
 
     HANDLE t = CreateThread(NULL, 0, watcher_main, s, 0, NULL);
-    if (t) CloseHandle(t);
+    if (!t) {
+        /* audit #70: sem watcher o servico ficaria "running" sem deteccao de
+         * saida/restart -> aborta o spawn (mata o processo/job e reverte o estado) */
+        snprintf(err, errcap, "CreateThread(watcher) falhou (%lu)", GetLastError());
+        TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hProcess);
+        CloseHandle(job);
+        s->job = NULL; s->process = NULL; s->pid = 0; s->state = ST_STOPPED;
+        return -1;
+    }
+    CloseHandle(t);
     return 0;
 }
 
