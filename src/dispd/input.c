@@ -20,19 +20,22 @@ static HHOOK g_hook;
 static unsigned char g_down[256];       /* teclas fisicamente pressionadas (#26) */
 static unsigned char g_suppressed[256]; /* keydown suprimido -> suprime o keyup (#11) */
 static unsigned char g_to_app[256];     /* keydown FOI entregue ao app -> keyup tambem (#10) */
+static unsigned g_down_wid[256];        /* wid alvo do keydown -> keyup vai pro mesmo (#9) */
 
-/* fila de teclas (produtor: hook/WM_KEY*; consumidor: frame_tick — mesmo thread) */
-typedef struct { unsigned mods; DWORD vk, scan; int down; } KeyEv;
+/* fila de teclas (produtor: hook/WM_KEY*; consumidor: frame_tick — mesmo thread).
+ * audit #9: guarda o wid do foco NO ENQUEUE — se o mouse/foco muda antes do drain,
+ * a tecla ainda vai pra janela certa (0 = decide no drain, ex.: grab). */
+typedef struct { unsigned mods; DWORD vk, scan; int down; unsigned wid; } KeyEv;
 #define KQCAP 256
 static KeyEv g_kq[KQCAP];
 static int g_kqh, g_kqt;
 
-static int kq_push(unsigned mods, DWORD vk, DWORD scan, int down)
+static int kq_push(unsigned mods, DWORD vk, DWORD scan, int down, unsigned wid)
 {
     int nt = (g_kqt + 1) % KQCAP;
     if (nt == g_kqh) return 0;   /* cheia */
     g_kq[g_kqt].mods = mods; g_kq[g_kqt].vk = vk; g_kq[g_kqt].scan = scan;
-    g_kq[g_kqt].down = down;
+    g_kq[g_kqt].down = down; g_kq[g_kqt].wid = wid;
     g_kqt = nt;
     return 1;
 }
@@ -142,7 +145,7 @@ static int builtin_key(unsigned mods, DWORD vk)
 }
 
 /* roteamento real (main thread, fora do hook) */
-static void route_key(unsigned mods, DWORD vk, DWORD scan, int down)
+static void route_key(unsigned mods, DWORD vk, DWORD scan, int down, unsigned wid)
 {
     if (down && wmproto_connected() && wmproto_grabbed(mods, vk)) {
         wmproto_ev_key(mods, vk);
@@ -151,9 +154,12 @@ static void route_key(unsigned mods, DWORD vk, DWORD scan, int down)
     if (down && !wmproto_connected() && builtin_key(mods, vk))
         return;
 
-    Window *f = g_srv.focused;
-    if (!f)
-        return;   /* nada focado: nao engole (#19) */
+    /* audit #9: roteia pra janela que era foco NO ENQUEUE (wid), nao a atual — o
+     * mouse/foco pode ter mudado antes deste drain. Se sumiu ou nao esta visivel
+     * no ws atual, dropa (nao manda pra janela errada / #19: nada focado). */
+    Window *f = wid ? win_find(wid) : g_srv.focused;
+    if (!f || !f->visible || f->ws != g_srv.cur_ws)
+        return;
 
     /* traduz o caractere SO no keydown: ToUnicodeEx tem efeito colateral no
      * estado de dead keys/AltGr; chamar no keyup consumiria/produziria
@@ -236,7 +242,7 @@ void input_process_keys(void)
 {
     KeyEv e;
     while (kq_pop(&e))
-        route_key(e.mods, e.vk, e.scan, e.down);
+        route_key(e.mods, e.vk, e.scan, e.down, e.wid);
 }
 
 /* enfileira down/up; retorna 1 se a tecla deve ser suprimida (o hook usa isso) */
@@ -256,8 +262,9 @@ static int enqueue(DWORD vk, DWORD scan, int down)
         int want = grab || (g_srv.focused != NULL && (!mod || app));
         int suppress = grab || (g_srv.focused != NULL && !mod);
         int to_app = 0;
+        unsigned twid = g_srv.focused ? g_srv.focused->id : 0;   /* #9: alvo no enqueue */
         if (want) {
-            if (!kq_push(mods, vk, scan, 1)) {   /* #14: nao suprime o que nao enfileirou */
+            if (!kq_push(mods, vk, scan, 1, twid)) {   /* #14: nao suprime o que nao enfileirou */
                 /* audit #12: NAO marca g_down — senao o proximo auto-repeat
                  * viraria "repeat" e seria suprimido como se este tivesse sido
                  * entregue. Deixa g_down=0 pra a repeticao tentar de novo. */
@@ -270,6 +277,7 @@ static int enqueue(DWORD vk, DWORD scan, int down)
             to_app = (app && !grab);          /* #10: entregue AO APP (nao foi grab) */
         }
         g_down[idx] = 1;                      /* #12: so marca down apos entregar */
+        g_down_wid[idx] = twid;              /* #9: keyup vai pro mesmo alvo */
         g_suppressed[idx] = (unsigned char)(suppress ? 1 : 0);
         g_to_app[idx] = (unsigned char)(to_app ? 1 : 0);
         return suppress;
@@ -280,7 +288,8 @@ static int enqueue(DWORD vk, DWORD scan, int down)
         /* audit #10: so manda o keyup pro app se o KEYDOWN foi pro app (nao um
          * grab consumido pelo WM) — senao o app recebe um keyup orfao. */
         if (to_app) {
-            if (!kq_push(mods, vk, scan, 0))     /* audit #11: checa o retorno */
+            /* #11: checa o retorno; #9: mesmo alvo do keydown */
+            if (!kq_push(mods, vk, scan, 0, g_down_wid[idx]))
                 dispd_log("input: fila cheia, keyup perdido (mod pode ficar preso)");
         }
         int suppress = g_suppressed[idx];        /* suprime o par do keydown */
