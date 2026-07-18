@@ -13,6 +13,7 @@
 #include <spawn.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <sys/types.h>
 #include "syscall.h"
 
@@ -41,10 +42,10 @@ int posix_spawn(pid_t *restrict res, const char *restrict path,
 	char *const argv[restrict], char *const envp[restrict])
 {
 	struct { int fd, backup; } saved[64];
-	int nsaved = 0, i, has_chdir = 0;
+	int nsaved = 0, i, has_chdir = 0, err = 0;
 	char cwd[4096];
 	long cwdlen = -1;
-	long pid;
+	long pid = -1;
 	(void)attr;
 
 	if (fa && fa->__actions) {
@@ -62,15 +63,22 @@ int posix_spawn(pid_t *restrict res, const char *restrict path,
 			cwdlen = __syscall(SYS_getcwd, cwd, sizeof cwd);
 
 		/* aplica na mesma ordem da musl: do fim para o começo (->prev) */
-		for (; op; op = op->prev) {
+		for (; op && !err; op = op->prev) {
 			int target = (op->cmd == FDOP_CHDIR ||
 			              op->cmd == FDOP_FCHDIR) ? -1 : op->fd;
 			/* salva (uma vez) o fd-alvo antes de sobrescrevê-lo */
-			if (target >= 0 && nsaved < (int)(sizeof saved / sizeof *saved)) {
+			if (target >= 0) {
 				int k, already = 0;
 				for (k = 0; k < nsaved; k++)
 					if (saved[k].fd == target) { already = 1; break; }
 				if (!already) {
+					/* audit #80 (critico): sem espaço no journal, a mutação
+					 * abaixo deixaria o fd do PAI corrompido pra sempre (não
+					 * há como restaurar) — aborta ANTES de mutar. */
+					if (nsaved >= (int)(sizeof saved / sizeof *saved)) {
+						err = EMFILE;
+						break;
+					}
 					int b = __syscall(SYS_fcntl, target,
 					                  F_DUPFD_CLOEXEC, 40);
 					saved[nsaved].fd = target;
@@ -78,41 +86,51 @@ int posix_spawn(pid_t *restrict res, const char *restrict path,
 					nsaved++;
 				}
 			}
+			long r = 0;
 			switch (op->cmd) {
 			case FDOP_CLOSE:
+				/* close de fd já fechado é benigno -> best-effort */
 				__syscall(SYS_close, op->fd);
 				break;
 			case FDOP_DUP2:
 				if (op->srcfd != op->fd) {
-					__syscall(SYS_dup3, op->srcfd, op->fd, 0);
+					r = __syscall(SYS_dup3, op->srcfd, op->fd, 0);
 				} else {
 					int fl = __syscall(SYS_fcntl, op->fd, F_GETFD);
-					__syscall(SYS_fcntl, op->fd, F_SETFD,
+					r = __syscall(SYS_fcntl, op->fd, F_SETFD,
 					          fl & ~FD_CLOEXEC);
 				}
 				break;
 			case FDOP_OPEN: {
 				int t = __syscall(SYS_openat, AT_FDCWD, op->path,
 				                  op->oflag, op->mode);
-				if (t >= 0 && t != op->fd) {
-					__syscall(SYS_dup3, t, op->fd, 0);
+				if (t < 0) { r = t; break; }
+				if (t != op->fd) {
+					r = __syscall(SYS_dup3, t, op->fd, 0);
 					__syscall(SYS_close, t);
 				}
 				break; }
 			case FDOP_CHDIR:
-				__syscall(SYS_chdir, op->path);
+				r = __syscall(SYS_chdir, op->path);
 				break;
 			case FDOP_FCHDIR:
-				__syscall(SYS_fchdir, op->fd);
+				r = __syscall(SYS_fchdir, op->fd);
 				break;
 			}
+			/* audit #81: file action (exceto close) que falha aborta o spawn ->
+			 * o filho não nasce com redirects errados; o pai é restaurado abaixo */
+			if (r < 0)
+				err = (int)-r;
 		}
 	}
 
-	/* spawn no processo atual (o pai) — o filho herda os fds 0/1/2 montados */
-	pid = __syscall(NT_NR_spawn, path, argv, envp ? envp : __environ);
+	/* spawn no processo atual (o pai) — só se as file actions aplicaram sem
+	 * erro (#80/#81); o filho herda os fds 0/1/2 montados */
+	if (!err)
+		pid = __syscall(NT_NR_spawn, path, argv, envp ? envp : __environ);
 
-	/* restaura os fds tocados (ordem inversa) e o CWD */
+	/* restaura os fds tocados (ordem inversa) e o CWD — SEMPRE, seja rollback de
+	 * erro ou limpeza pós-spawn, pra o pai nunca ficar alterado (#82) */
 	for (i = nsaved - 1; i >= 0; i--) {
 		if (saved[i].backup >= 0) {
 			__syscall(SYS_dup3, saved[i].backup, saved[i].fd, 0);
@@ -124,6 +142,8 @@ int posix_spawn(pid_t *restrict res, const char *restrict path,
 	if (has_chdir && cwdlen > 0)
 		__syscall(SYS_chdir, cwd);
 
+	if (err)
+		return err;         /* file action falhou: pai restaurado, nada spawnou */
 	if (pid < 0)
 		return (int)-pid;   /* posix_spawn devolve o errno positivo */
 	if (res)
