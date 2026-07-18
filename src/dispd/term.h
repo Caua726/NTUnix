@@ -25,6 +25,7 @@ typedef struct Cell {
     COLORREF       fg;    /* cor resolvida (RGB) */
     COLORREF       bg;    /* cor resolvida (RGB) */
     unsigned short attr;  /* ATTR_* */
+    unsigned char  w;     /* #98: largura em celulas (1 ou 2; 0 tratado como 1) */
 } Cell;
 
 /* uma linha de scrollback (rolou pra fora do topo da tela) */

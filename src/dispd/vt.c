@@ -110,6 +110,7 @@ static int cb_sb_pushline(int cols, const VTermScreenCell *cells, void *user)
     for (int x = 0; x < cols; x++) {
         VTermScreenCell c = cells[x];
         ln->cells[x].ch = c.chars[0] ? c.chars[0] : ' ';
+        ln->cells[x].w = (unsigned char)c.width;   /* #98 */
         ln->cells[x].fg = vcolor((VTermScreen *)t->vts, c.fg, DEF_FG);
         ln->cells[x].bg = vcolor((VTermScreen *)t->vts, c.bg, DEF_BG);
         ln->cells[x].attr = (unsigned short)((c.attrs.bold ? ATTR_BOLD : 0) |
@@ -437,6 +438,7 @@ void vt_render(Terminal *t, HDC memdc, HFONT font, int cellw, int cellh)
                     continue;
                 }
                 o->ch = vc.chars[0] ? vc.chars[0] : ' ';
+                o->w = (unsigned char)vc.width;   /* #98: 1 ou 2 (CJK/wide) */
                 o->fg = vcolor(vts, vc.fg, DEF_FG);
                 o->bg = vcolor(vts, vc.bg, DEF_BG);
                 o->attr = (unsigned short)((vc.attrs.bold ? ATTR_BOLD : 0) |
@@ -457,15 +459,21 @@ void vt_render(Terminal *t, HDC memdc, HFONT font, int cellw, int cellh)
         int x = 0;
         while (x < cols) {
             Cell *c0 = &g_snap[y * cols + x];
+            int w0 = c0->w ? c0->w : 1;   /* #98: largura em celulas (0 = 1) */
             unsigned short a0 = c0->attr;
             COLORREF fg0 = c0->fg, bg0 = c0->bg;
+            /* run de celulas LARGURA-1 com mesma cor/attr; um wide char (w0>1) e'
+             * desenhado SOZINHO — o run para antes dele e a celula spacer seguinte
+             * e' pulada (x += span). Igual xterm/kitty. */
             int run = 1;
-            while (x + run < cols) {
-                Cell *cn = &g_snap[y * cols + x + run];
-                if (cn->fg != fg0 || cn->bg != bg0 || cn->attr != a0)
-                    break;
-                run++;
-            }
+            if (w0 == 1)
+                while (x + run < cols) {
+                    Cell *cn = &g_snap[y * cols + x + run];
+                    if ((cn->w ? cn->w : 1) != 1 ||
+                        cn->fg != fg0 || cn->bg != bg0 || cn->attr != a0)
+                        break;
+                    run++;
+                }
             COLORREF fg = fg0, bg = bg0;
             if (a0 & ATTR_BOLD)    fg = brighten(fg);
             if (a0 & ATTR_REVERSE) { COLORREF tmp = fg; fg = bg; bg = tmp; }
@@ -479,20 +487,21 @@ void vt_render(Terminal *t, HDC memdc, HFONT font, int cellw, int cellh)
                 unsigned cp = g_snap[y * cols + x + i].ch;
                 wbuf[i] = (cp >= 0x20 && cp < 0x10000) ? (WCHAR)cp
                         : (cp >= 0x10000 ? (WCHAR)0xFFFD : L' ');
-                dx[i] = cellw;   /* avanço fixo por célula (grade perfeita) */
+                dx[i] = (i == 0 ? w0 : 1) * cellw;   /* #98: wide char ocupa w0 celulas */
             }
-            RECT rc = { x * cellw, y * cellh, (x + bn) * cellw, (y + 1) * cellh };
+            int span = (w0 == 1) ? bn : w0;   /* celulas cobertas por este desenho */
+            RECT rc = { x * cellw, y * cellh, (x + span) * cellw, (y + 1) * cellh };
             ExtTextOutW(memdc, x * cellw, y * cellh, ETO_OPAQUE | ETO_CLIPPED,
                         &rc, wbuf, bn, dx);
             if (a0 & ATTR_UNDERLINE) {
                 HPEN pen = CreatePen(PS_SOLID, 1, fg);
                 HPEN op = (HPEN)SelectObject(memdc, pen);
                 MoveToEx(memdc, x * cellw, (y + 1) * cellh - 1, NULL);
-                LineTo(memdc, (x + bn) * cellw, (y + 1) * cellh - 1);
+                LineTo(memdc, (x + span) * cellw, (y + 1) * cellh - 1);
                 SelectObject(memdc, op);
                 DeleteObject(pen);
             }
-            x += bn;
+            x += span;
         }
     }
 
