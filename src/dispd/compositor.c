@@ -117,6 +117,7 @@ Window *win_create(WinKind kind, int cw, int ch)
     FillRect(w->memdc, &rc, b);
     DeleteObject(b);
 
+    w->anim_ms = GetTickCount64();   /* #35: fade-in ao aparecer */
     w->next = g_srv.windows;
     g_srv.windows = w;
     g_srv.dirty = 1;
@@ -507,6 +508,41 @@ static int corner_radius(void)
     return r;
 }
 
+/* ---- animacoes (aparecer): fade-in por tempo (#35 modernizacao) ---- */
+#define ANIM_MS 160
+static int anim_enabled(void)
+{
+    static int en = -1;
+    if (en < 0) {
+        char v[8] = "";
+        GetEnvironmentVariableA("DISPD_ANIM", v, sizeof v);
+        en = (v[0] == '0') ? 0 : 1;
+    }
+    return en;
+}
+
+/* alpha (0..255) da animacao de aparecer da janela; 255 = pronta. Zera anim_ms
+ * ao terminar (ease-out cubico). */
+static int win_anim_alpha(Window *w)
+{
+    if (!anim_enabled() || w->anim_ms == 0)
+        return 255;
+    ULONGLONG el = GetTickCount64() - w->anim_ms;
+    if (el >= ANIM_MS) { w->anim_ms = 0; return 255; }
+    int u = 255 - (int)(el * 255 / ANIM_MS);         /* 255 -> 0 */
+    return 255 - (int)((long long)u * u * u / (255 * 255));  /* 1-(1-t)^3 */
+}
+
+int compositor_animating(void)
+{
+    if (!anim_enabled())
+        return 0;
+    for (Window *w = g_srv.windows; w; w = w->next)
+        if (w->anim_ms != 0)
+            return 1;
+    return 0;
+}
+
 /* arredonda os 4 cantos da janela `outer`: os pixels do canto fora do arco de
  * raio `radius` viram wallpaper (recorta a moldura retangular). Limitado a clip. */
 static void round_corners(const RECT *outer, int radius, const RECT *clip)
@@ -611,7 +647,7 @@ static int collect_visible(Window **vis, int cap)
  * `clip` (o retangulo de damage; NULL = sem limite). Opacidade cheia -> BitBlt
  * opaco (rapido). O src e' amostrado em (px-dx, py-dy). */
 static void blit_glass(HDC memdc, const void *sbits, int sw,
-                       int dx, int dy, int bw, int bh, const RECT *clip)
+                       int dx, int dy, int bw, int bh, const RECT *clip, int amul)
 {
     int W = g_srv.scr_w, H = g_srv.scr_h;
     int x0 = dx, y0 = dy, x1 = dx + bw, y1 = dy + bh;
@@ -628,7 +664,9 @@ static void blit_glass(HDC memdc, const void *sbits, int sw,
     if (x0 >= x1 || y0 >= y1)
         return;
 
-    if (glass_opacity() >= 255) {   /* opaco: BitBlt so a interseccao */
+    int a = glass_opacity();
+    if (amul < 255) a = a * amul / 255;   /* #35: fade de aparecer (amul<255) */
+    if (a >= 255) {   /* opaco: BitBlt so a interseccao */
         BitBlt(g_srv.cdc, x0, y0, x1 - x0, y1 - y0, memdc, x0 - dx, y0 - dy, SRCCOPY);
         return;
     }
@@ -637,7 +675,7 @@ static void blit_glass(HDC memdc, const void *sbits, int sw,
     const unsigned char *src = (const unsigned char *)sbits;
     if (!dst || !src) return;
     int dstride = g_srv.frame.stride, sstride = sw * 4;
-    int a = glass_opacity(), ia = 255 - a;
+    int ia = 255 - a;   /* a ja computado acima (com o amul da animacao) */
     /* frosted: borra o fundo (que ja tem wallpaper + janelas de baixo) antes de
      * misturar o conteudo por cima -> a parte translucida (ia) mostra o borrado */
     blur_bg(dst, dstride, x0, y0, x1, y1, blur_radius());
@@ -746,7 +784,8 @@ static void compose_one_window(Window *w, const RECT *clip)
     int bh = w->ch < ih ? w->ch : ih;
     if (bw > 0 && bh > 0) {
         if (w->kind == WK_TERM)          /* glass: terminal translucido */
-            blit_glass(w->memdc, w->bits, w->cw, ix, iy + g_srv.title_h, bw, bh, clip);
+            blit_glass(w->memdc, w->bits, w->cw, ix, iy + g_srv.title_h, bw, bh, clip,
+                       win_anim_alpha(w));   /* #35: fade-in ao aparecer */
         else                              /* app: superficie opaca (GDI clipa) */
             BitBlt(g_srv.cdc, ix, iy + g_srv.title_h, bw, bh, w->memdc, 0, 0, SRCCOPY);
     }

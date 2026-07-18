@@ -257,6 +257,8 @@ static int frame_tick(void)   /* retorna 1 se apresentou um quadro */
         input_hook_refresh();
     tick++;
     int need = g_srv.dirty || g_srv.bar_dirty;
+    if (!need && compositor_animating())   /* #35: mantem quadros enquanto anima */
+        need = g_srv.dirty = 1;            /* recompoe cheio p/ o fade avancar */
     for (Window *w = g_srv.windows; w && !need; w = w->next)
         if (w->visible && w->ws == g_srv.cur_ws && w->term && w->term->dirty)
             need = 1;

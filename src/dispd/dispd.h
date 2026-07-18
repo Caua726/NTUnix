@@ -46,6 +46,7 @@ typedef struct Window {
     HWND      hwnd;        /* kind==WK_FOREIGN: a janela do Windows gerenciada */
     LONG_PTR  orig_style;  /* estilo original (p/ restaurar ao soltar) */
     RECT      fg_target;   /* kind==WK_FOREIGN: onde a janela DEVE ficar (re-snap) */
+    ULONGLONG anim_ms;     /* inicio da animacao de aparecer (0 = nenhuma/pronta) */
     struct Window *next;
 } Window;
 #define MAX_TABS 16
@@ -98,6 +99,7 @@ Window  *win_find(unsigned id);
 void     win_set_client_size(Window *w, int cw, int ch);
 void     win_focus(Window *w);
 void     compose_and_present(void);
+int      compositor_animating(void);   /* #35: ha janela animando -> manter frames */
 Window  *win_at_point(int x, int y);   /* topo visivel no ws atual */
 
 /* input.c — teclado: hook LL global (enfileira) + WM_KEYDOWN fallback */
