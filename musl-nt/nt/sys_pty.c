@@ -129,6 +129,22 @@ static nt_sc_t pty_read_raw(struct nt_fd *slot, void *buf, DWORD amount)
         } else if (GetLastError() == ERROR_BROKEN_PIPE) {
             return 0;
         }
+    } else if (g_tio.c_cc[NT_VMIN] == 0) {
+        /* audit #108: VMIN=0 (raw) NAO bloqueia indefinidamente. VTIME=0 ->
+         * retorna o disponivel na hora (poll); VTIME>0 -> espera ate VTIME*100ms.
+         * VMIN>=1 (default do ash) segue pelo ReadFile bloqueante abaixo. */
+        unsigned vtime = g_tio.c_cc[NT_VTIME];
+        ULONGLONG t0 = GetTickCount64();
+        for (;;) {
+            DWORD avail = 0;
+            if (!PeekNamedPipe(slot->handle, 0, 0, 0, &avail, 0)) {
+                if (GetLastError() == ERROR_BROKEN_PIPE) return 0;
+            }
+            if (avail > 0) break;                                 /* tem dado -> le */
+            if (vtime == 0) return 0;                             /* VMIN=0,VTIME=0: poll */
+            if (GetTickCount64() - t0 >= (ULONGLONG)vtime * 100) return 0;  /* timeout */
+            Sleep(10);
+        }
     }
     if (!ReadFile(slot->handle, buf, amount, &got, 0)) {
         DWORD e = GetLastError();
