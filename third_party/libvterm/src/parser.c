@@ -222,8 +222,11 @@ size_t vterm_input_write(VTerm *vt, const char *bytes, size_t len)
       if(c >= '0' && c <= '9') {
         if(vt->parser.v.csi.args[vt->parser.v.csi.argi] == CSI_ARG_MISSING)
           vt->parser.v.csi.args[vt->parser.v.csi.argi] = 0;
-        vt->parser.v.csi.args[vt->parser.v.csi.argi] *= 10;
-        vt->parser.v.csi.args[vt->parser.v.csi.argi] += c - '0';
+        /* satura p/ nao estourar `long` (32-bit no Windows) — audit #92 */
+        if(vt->parser.v.csi.args[vt->parser.v.csi.argi] < 100000000) {
+          vt->parser.v.csi.args[vt->parser.v.csi.argi] *= 10;
+          vt->parser.v.csi.args[vt->parser.v.csi.argi] += c - '0';
+        }
         break;
       }
       if(c == ':') {
@@ -231,13 +234,19 @@ size_t vterm_input_write(VTerm *vt, const char *bytes, size_t len)
         c = ';';
       }
       if(c == ';') {
-        vt->parser.v.csi.argi++;
-        vt->parser.v.csi.args[vt->parser.v.csi.argi] = CSI_ARG_MISSING;
+        /* audit #91 (critico): cada ';' incrementava argi SEM limite -> escrita
+         * alem de args[CSI_ARGS_MAX] (corrompe memoria do dispd via terminal).
+         * Limita ao array; args extras sao descartados (como xterm). */
+        if(vt->parser.v.csi.argi < CSI_ARGS_MAX - 1) {
+          vt->parser.v.csi.argi++;
+          vt->parser.v.csi.args[vt->parser.v.csi.argi] = CSI_ARG_MISSING;
+        }
         break;
       }
 
       /* else fallthrough */
-      vt->parser.v.csi.argi++;
+      if(vt->parser.v.csi.argi < CSI_ARGS_MAX)
+        vt->parser.v.csi.argi++;
       vt->parser.intermedlen = 0;
       vt->parser.state = CSI_INTERMED;
     case CSI_INTERMED:
@@ -263,9 +272,11 @@ size_t vterm_input_write(VTerm *vt, const char *bytes, size_t len)
       if(c >= '0' && c <= '9') {
         if(vt->parser.v.osc.command == -1)
           vt->parser.v.osc.command = 0;
-        else
+        /* satura (audit #92) */
+        if(vt->parser.v.osc.command < 100000000) {
           vt->parser.v.osc.command *= 10;
-        vt->parser.v.osc.command += c - '0';
+          vt->parser.v.osc.command += c - '0';
+        }
         break;
       }
       if(c == ';') {
