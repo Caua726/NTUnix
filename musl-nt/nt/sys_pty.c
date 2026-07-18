@@ -156,6 +156,18 @@ nt_sc_t nt_pty_read(struct nt_fd *slot, void *ubuf, uint64_t count)
     while (!g_line_ready) {
         unsigned char c;
         DWORD got = 0;
+        if (slot->flags & NT_O_NONBLOCK) {   /* audit #105: canonico tambem respeita
+                                              * O_NONBLOCK — sem bytes e sem linha
+                                              * completa -> EAGAIN (nao bloqueia) */
+            DWORD avail = 0;
+            if (PeekNamedPipe(slot->handle, 0, 0, 0, &avail, 0)) {
+                if (!avail)
+                    return -NT_EAGAIN;
+            } else if (GetLastError() == ERROR_BROKEN_PIPE) {
+                g_line_ready = 1;
+                break;
+            }
+        }
         if (!ReadFile(slot->handle, &c, 1, &got, 0)) {
             DWORD e = GetLastError();
             if (e == ERROR_BROKEN_PIPE || e == ERROR_HANDLE_EOF) { g_line_ready = 1; break; }

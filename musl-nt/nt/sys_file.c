@@ -475,7 +475,10 @@ static int poll_one(struct nt_pollfd *p)
         return nt_socket_poll(slot, p->events, &p->revents);
     if (p->events & NT_POLLOUT) p->revents |= NT_POLLOUT;
     if (p->events & NT_POLLIN) {
-        if (slot->kind == NT_FD_PIPE) {
+        if (slot->kind == NT_FD_PIPE || slot->kind == NT_FD_PTY) {
+            /* audit #104: o PTY tambem e' um pipe por baixo — checa se ha bytes
+             * de verdade. Antes caia no else e reportava POLLIN SEMPRE, entao o
+             * caller chamava read() e bloqueava. */
             if (PeekNamedPipe(slot->handle, 0, 0, 0, &available, 0)) {
                 if (available) p->revents |= NT_POLLIN;
             } else if (GetLastError() == ERROR_BROKEN_PIPE) {
