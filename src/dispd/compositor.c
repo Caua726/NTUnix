@@ -173,8 +173,10 @@ void win_destroy(Window *w)
     if (refocus)
         g_srv.focused = NULL;
 
-    if (w->term)
-        term_destroy(w->term);
+    for (int i = 0; i < w->ntabs; i++)   /* destroi todas as abas */
+        term_destroy(w->tabs[i]);
+    w->ntabs = 0;
+    w->term = NULL;
     free_dib(w->memdc, w->dib);
     if (w->section)
         CloseHandle(w->section);
@@ -222,8 +224,12 @@ void win_set_client_size(Window *w, int cw, int ch)
     FillRect(w->memdc, &rc, b);
     DeleteObject(b);
 
-    if (w->term)
-        term_resize(w->term, cw / g_srv.cellw, ch / g_srv.cellh);
+    {
+        int cols = g_srv.cellw > 0 ? cw / g_srv.cellw : 80;
+        int rows = g_srv.cellh > 0 ? ch / g_srv.cellh : 24;
+        for (int i = 0; i < w->ntabs; i++)   /* todas as abas acompanham */
+            term_resize(w->tabs[i], cols, rows);
+    }
     w->dirty = 1;
     g_srv.dirty = 1;
 }
@@ -387,33 +393,47 @@ void compose_and_present(void)
         int iy = w->rect.top + w->border_px;
         int iw = (w->rect.right - w->rect.left) - 2 * w->border_px;
 
-        /* barra de titulo por janela (estilo i3): faixa colorida + titulo */
+        /* barra de ABAS do terminal (i3-ish); barra de titulo simples p/ apps */
         if (g_srv.title_h > 0 && iw > 0) {
-            RECT tb = { ix, iy, ix + iw, iy + g_srv.title_h };
-            COLORREF tc = w->focused ? BORDER_FOCUS : RGB(44, 44, 52);
-            HBRUSH tbb = CreateSolidBrush(tc);
-            FillRect(g_srv.cdc, &tb, tbb);
-            DeleteObject(tbb);
             SelectObject(g_srv.cdc, g_srv.font);
             SetBkMode(g_srv.cdc, TRANSPARENT);
-            SetTextColor(g_srv.cdc, w->focused ? RGB(12, 14, 20)
-                                               : RGB(180, 180, 195));
-            /* diagnostico temporario no titulo: backend, bytes recebidos, vivo */
-            char lbl[320];
-            const char *base = w->title[0] ? w->title
-                             : (w->kind == WK_TERM ? "terminal" : "app");
-            /* diagnostico so em DISPD_DEBUG ou quando o terminal esta quebrado
-             * (rx=0 ou morto) — UI limpa no uso normal (#36) */
-            if (w->kind == WK_TERM && w->term &&
-                (g_srv.debug || w->term->rx == 0 || !w->term->alive))
-                snprintf(lbl, sizeof lbl, "%s  [%s rx:%ld a:%d]", base,
-                         w->term->be ? w->term->be->name : "?",
-                         w->term->rx, (int)w->term->alive);
-            else
-                snprintf(lbl, sizeof lbl, "%s", base);
-            RECT tr = { ix + 6, iy, ix + iw - 6, iy + g_srv.title_h };
-            DrawTextA(g_srv.cdc, lbl, -1, &tr,
-                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            if (w->kind == WK_TERM && w->ntabs > 0) {
+                int tw = iw / w->ntabs;
+                if (tw < 1) tw = 1;
+                for (int ti = 0; ti < w->ntabs; ti++) {
+                    int tx = ix + ti * tw;
+                    int twid = (ti == w->ntabs - 1) ? (ix + iw - tx) : tw;
+                    int act = (ti == w->active_tab);
+                    RECT tb = { tx, iy, tx + twid, iy + g_srv.title_h };
+                    COLORREF tc = act ? (w->focused ? BORDER_FOCUS : RGB(70, 70, 84))
+                                      : RGB(30, 30, 38);
+                    HBRUSH tbb = CreateSolidBrush(tc);
+                    FillRect(g_srv.cdc, &tb, tbb);
+                    DeleteObject(tbb);
+                    Terminal *tt = w->tabs[ti];
+                    const char *base = (tt && tt->title[0]) ? tt->title : "sh";
+                    char lbl[288];
+                    snprintf(lbl, sizeof lbl, " %d %s", ti + 1, base);
+                    SetTextColor(g_srv.cdc, act
+                        ? (w->focused ? RGB(12, 14, 20) : RGB(225, 225, 235))
+                        : RGB(150, 150, 165));
+                    RECT tr = { tx + 4, iy, tx + twid - 4, iy + g_srv.title_h };
+                    DrawTextA(g_srv.cdc, lbl, -1, &tr,
+                              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+                }
+            } else {
+                RECT tb = { ix, iy, ix + iw, iy + g_srv.title_h };
+                COLORREF tc = w->focused ? BORDER_FOCUS : RGB(44, 44, 52);
+                HBRUSH tbb = CreateSolidBrush(tc);
+                FillRect(g_srv.cdc, &tb, tbb);
+                DeleteObject(tbb);
+                SetTextColor(g_srv.cdc, w->focused ? RGB(12, 14, 20)
+                                                   : RGB(180, 180, 195));
+                const char *base = w->title[0] ? w->title : "app";
+                RECT tr = { ix + 6, iy, ix + iw - 6, iy + g_srv.title_h };
+                DrawTextA(g_srv.cdc, base, -1, &tr,
+                          DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            }
         }
 
         /* conteudo (terminal/app) abaixo da barra de titulo, SEMPRE clipado a

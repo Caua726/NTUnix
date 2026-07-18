@@ -173,6 +173,23 @@ static void route_key(unsigned mods, DWORD vk, DWORD scan, int down)
     if (!f->term || !down)                      /* terminal: so no keydown */
         return;
 
+    /* abas do terminal (Ctrl+Shift+T/W, Ctrl+Tab) — nao vao pro pty */
+    if ((mods & MOD_CTRL) && (mods & MOD_SHIFT) && vk == 'T') {
+        win_tab_add(f, NULL);                   /* nova aba tty */
+        return;
+    }
+    if ((mods & MOD_CTRL) && (mods & MOD_SHIFT) && vk == 'W') {
+        win_tab_close(f, f->active_tab);        /* ultima aba -> fecha a janela */
+        return;
+    }
+    if ((mods & MOD_CTRL) && vk == VK_TAB) {
+        if (f->ntabs > 1) {
+            int d = (mods & MOD_SHIFT) ? -1 : 1;
+            win_tab_switch(f, (f->active_tab + d + f->ntabs) % f->ntabs);
+        }
+        return;
+    }
+
     /* scrollback: Shift+PgUp/PgDn rola o historico (nao vai pro pty) */
     if ((mods & MOD_SHIFT) && (vk == VK_PRIOR || vk == VK_NEXT)) {
         int page = f->term->rows > 1 ? f->term->rows - 1 : 1;
@@ -261,6 +278,22 @@ void input_mouse(int sx, int sy, int button, int press, int motion)
     Window *w = win_at_point(sx, sy);
     if (!w)
         return;
+
+    /* clique na barra de abas -> troca de aba */
+    if (w->kind == WK_TERM && w->ntabs > 0 && button == 0 && press && !motion) {
+        int tby = w->rect.top + w->border_px;
+        if (g_srv.title_h > 0 && sy >= tby && sy < tby + g_srv.title_h) {
+            int tix = w->rect.left + w->border_px;
+            int tiw = (w->rect.right - w->rect.left) - 2 * w->border_px;
+            int tw = tiw / w->ntabs;
+            if (tw < 1) tw = 1;
+            int ti = (sx - tix) / tw;
+            if (ti >= 0 && ti < w->ntabs)
+                win_tab_switch(w, ti);
+            return;
+        }
+    }
+
     int ix = w->rect.left + w->border_px;
     int iy = w->rect.top + w->border_px + g_srv.title_h;
     int cx = sx - ix, cy = sy - iy;

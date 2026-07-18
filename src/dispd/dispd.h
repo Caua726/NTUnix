@@ -37,10 +37,15 @@ typedef struct Window {
     int       cw, ch;      /* tamanho em pixels da area cliente */
     int       dirty;
 
-    Terminal *term;        /* kind==WK_TERM */
+    Terminal *term;        /* kind==WK_TERM: aba ATIVA (= tabs[active_tab]) */
+    Terminal *tabs[16];    /* abas (cada uma = uma sessao tty/cmd/powershell) */
+    int       ntabs;
+    int       active_tab;
+
     HANDLE    section;     /* kind==WK_APP: section compartilhada com o app */
     struct Window *next;
 } Window;
+#define MAX_TABS 16
 
 typedef struct Server {
     HWND      root;
@@ -119,8 +124,13 @@ void     appsrv_input_key(unsigned id, unsigned mods, unsigned vk, unsigned ch, 
 void     appsrv_input_mouse(unsigned id, int x, int y, int buttons);
 
 /* dispd.c */
-Window  *spawn_terminal(const char *cmdline);  /* cria janela WK_TERM + pty */
+Window  *spawn_terminal(const char *cmdline);  /* cria janela WK_TERM + 1a aba */
 void     dispd_close_window(Window *w);        /* fecha janela + conexao do app (#54) */
 void     dispd_log(const char *fmt, ...);
+
+/* abas do terminal (dispd.c) — internas ao dispd; o WM nao sabe delas */
+int      win_tab_add(Window *w, const char *cmdline);  /* nova aba, vira ativa */
+void     win_tab_close(Window *w, int idx);            /* fecha; ultima -> fecha janela */
+void     win_tab_switch(Window *w, int idx);           /* ativa a aba idx */
 
 #endif

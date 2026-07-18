@@ -32,28 +32,31 @@ void dispd_log(const char *fmt, ...)
     }
 }
 
+/* cmdline do shell padrao (tty): busybox ash, ou cmd.exe se DISPD_SHELL=cmd */
+static const char *resolve_shell(const char *cmdline, char *buf, size_t cap)
+{
+    if (cmdline)
+        return cmdline;
+    char shell[32] = "";
+    GetEnvironmentVariableA("DISPD_SHELL", shell, sizeof shell);
+    if (!_stricmp(shell, "cmd")) {
+        snprintf(buf, cap, "cmd.exe");
+    } else {
+        char bb[MAX_PATH];
+        ntu_path("/system/bin/busybox.exe", bb, sizeof bb);
+        snprintf(buf, cap, "\"%s\" ash -i", bb);
+    }
+    return buf;
+}
+
 Window *spawn_terminal(const char *cmdline)
 {
-    char def[MAX_PATH + 64], bb[MAX_PATH];
-    if (!cmdline) {
-        char shell[32] = "";
-        GetEnvironmentVariableA("DISPD_SHELL", shell, sizeof shell);
-        if (!_stricmp(shell, "cmd")) {
-            snprintf(def, sizeof def, "cmd.exe");   /* diagnostico: DISPD_SHELL=cmd */
-        } else {
-            ntu_path("/system/bin/busybox.exe", bb, sizeof bb);
-            snprintf(def, sizeof def, "\"%s\" ash -i", bb);
-        }
-        cmdline = def;
-    }
-
     int cols = 80, rows = 24;
     Window *w = win_create(WK_TERM, cols * g_srv.cellw, rows * g_srv.cellh);
     if (!w)
         return NULL;
     strncpy(w->title, "terminal", sizeof w->title - 1);
-    w->term = term_create(cmdline, cols, rows, w);
-    if (!w->term) {
+    if (win_tab_add(w, cmdline) != 0) {   /* 1a aba */
         dispd_log("spawn_terminal: term_create falhou");
         win_destroy(w);
         return NULL;
@@ -64,6 +67,65 @@ Window *spawn_terminal(const char *cmdline)
     dispd_log("terminal criado (id %u, backend %s)", w->id,
               w->term->be ? w->term->be->name : "?");
     return w;
+}
+
+/* ---- abas (tabs) do terminal: uma janela hospeda varias sessoes ---- */
+
+int win_tab_add(Window *w, const char *cmdline)
+{
+    if (!w || w->kind != WK_TERM || w->ntabs >= MAX_TABS)
+        return -1;
+    char def[MAX_PATH + 64];
+    cmdline = resolve_shell(cmdline, def, sizeof def);   /* NULL -> tty (ash) */
+    int cols = g_srv.cellw > 0 ? w->cw / g_srv.cellw : 80;
+    int rows = g_srv.cellh > 0 ? w->ch / g_srv.cellh : 24;
+    if (cols < 1) cols = 1;
+    if (rows < 1) rows = 1;
+    Terminal *t = term_create(cmdline, cols, rows, w);
+    if (!t)
+        return -1;
+    w->tabs[w->ntabs++] = t;
+    w->active_tab = w->ntabs - 1;
+    w->term = t;                 /* aba ativa */
+    t->dirty = 1;
+    w->dirty = 1;
+    g_srv.dirty = 1;
+    return 0;
+}
+
+void win_tab_switch(Window *w, int idx)
+{
+    if (!w || w->ntabs <= 0)
+        return;
+    if (idx < 0) idx = 0;
+    if (idx >= w->ntabs) idx = w->ntabs - 1;
+    w->active_tab = idx;
+    w->term = w->tabs[idx];
+    int cols = g_srv.cellw > 0 ? w->cw / g_srv.cellw : 80;
+    int rows = g_srv.cellh > 0 ? w->ch / g_srv.cellh : 24;
+    term_resize(w->term, cols, rows);   /* casa com o tamanho atual da janela */
+    w->term->dirty = 1;
+    w->dirty = 1;
+    g_srv.dirty = 1;
+}
+
+void win_tab_close(Window *w, int idx)
+{
+    if (!w || idx < 0 || idx >= w->ntabs)
+        return;
+    term_destroy(w->tabs[idx]);
+    for (int i = idx; i < w->ntabs - 1; i++)
+        w->tabs[i] = w->tabs[i + 1];
+    w->ntabs--;
+    w->tabs[w->ntabs] = NULL;
+    if (w->ntabs == 0) {         /* fechou a ultima aba -> fecha a janela */
+        w->term = NULL;
+        dispd_close_window(w);
+        return;
+    }
+    if (w->active_tab >= w->ntabs)
+        w->active_tab = w->ntabs - 1;
+    win_tab_switch(w, w->active_tab);
 }
 
 /* fecha uma janela por qualquer caminho (WM, builtin, atalho): destroi a
