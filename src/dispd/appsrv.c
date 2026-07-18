@@ -108,8 +108,11 @@ static AppConn *conns_find(unsigned wid)
     return r;
 }
 
-/* escrita ao app (overlapped, com timeout) — worker (setup) e main (input) */
-static void app_send(AppConn *c, const char *line)
+/* escrita ao app (overlapped). wait_ms=quanto espera se a I/O ficar pendente;
+ * kill_on_timeout=marca a conexao morta se estourar o tempo. audit #38: o
+ * caminho de INPUT (main thread) chama com wait_ms=0 -> nunca bloqueia o
+ * compositor (app lento => dropa o evento); o setup (worker) usa 1s+kill. */
+static void app_send_to(AppConn *c, const char *line, DWORD wait_ms, int kill_on_timeout)
 {
     if (!c)
         return;
@@ -125,9 +128,10 @@ static void app_send(AppConn *c, const char *line)
     ov.hEvent = c->wev;
     ResetEvent(c->wev);
     DWORD w = 0;
+    int timedout = 0;
     BOOL ok = WriteFile(c->pipe, line, (DWORD)strlen(line), &w, &ov);
     if (!ok && GetLastError() == ERROR_IO_PENDING) {
-        if (WaitForSingleObject(c->wev, 1000) == WAIT_OBJECT_0)
+        if (WaitForSingleObject(c->wev, wait_ms) == WAIT_OBJECT_0)
             ok = GetOverlappedResult(c->pipe, &ov, &w, FALSE);
         else {
             /* espera o cancel terminar: 'ov' e 'line' sao locais e o kernel
@@ -135,24 +139,33 @@ static void app_send(AppConn *c, const char *line)
             CancelIoEx(c->pipe, &ov);
             GetOverlappedResult(c->pipe, &ov, &w, TRUE);
             ok = FALSE;
+            timedout = 1;
         }
     }
     LeaveCriticalSection(&c->wlock);
-    if (!ok)
+    /* falha REAL (pipe quebrado) sempre mata; timeout (app so lento) so mata se
+     * pedido — assim um evento de input perdido nao derruba a app */
+    if (!ok && (!timedout || kill_on_timeout))
         InterlockedExchange(&c->dead, 1);
+}
+
+static void app_send(AppConn *c, const char *line)   /* setup: bloqueia + mata */
+{
+    app_send_to(c, line, 1000, 1);
 }
 
 void appsrv_input_key(unsigned id, unsigned mods, unsigned vk, unsigned ch, int down)
 {
     AppConn *c = conns_find(id);
     if (c) { char b[64]; snprintf(b, sizeof b, "APP-KEY %x %x %x %d", mods, vk, ch, down ? 1 : 0);
-             app_send(c, b); }   /* #10: acao down/up */
+             app_send_to(c, b, 0, 0); }   /* #10 acao down/up; #38 nao bloqueia o compositor */
 }
 
 void appsrv_input_mouse(unsigned id, int x, int y, int buttons)
 {
     AppConn *c = conns_find(id);
-    if (c) { char b[64]; snprintf(b, sizeof b, "APP-MOUSE %d %d %d", x, y, buttons); app_send(c, b); }
+    if (c) { char b[64]; snprintf(b, sizeof b, "APP-MOUSE %d %d %d", x, y, buttons);
+             app_send_to(c, b, 0, 0); }   /* #38: input real-time, zero-wait */
 }
 
 void appsrv_close_wid(unsigned id)
