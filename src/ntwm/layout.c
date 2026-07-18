@@ -83,6 +83,12 @@ void send_frame(void)
         g_move_pending = 0;
     }
 
+    /* audit #26: o estado floating de cada janela vai DENTRO do frame (atomico
+     * com o layout), em vez de num CMD_FLOAT solto antes do send_frame */
+    for (Client *c = g_clients; c; c = c->next)
+        if (c->ws == g_curws)
+            wm_send("%s %u %d", CMD_FLOAT, c->id, c->floating);
+
     /* conta so os tiled (nao-floating) do ws atual */
     int n = 0;
     for (Client *c = g_clients; c; c = c->next)
@@ -181,7 +187,8 @@ void focusstack(int dir)
     }
     if (c) {
         g_focused = c;
-        wm_send("%s %u", CMD_FOCUS, c->id);
+        send_frame();   /* audit #23: re-declara com o novo foco -> o z do floating
+                         * focado sobe atomicamente (FOCUS sozinho nao mexia no z) */
     }
 }
 
@@ -234,6 +241,8 @@ void zoom(void)
     Client *c = g_focused;
     if (!c || c == g_clients)
         return;
+    c->floating = 0;   /* audit #25: zoom torna a janela master (tiled) — se ela
+                        * fosse floating, ficava fora do tiling e o zoom nao surtia efeito */
     /* pop: destaca e re-anexa na cabeca (vira master) */
     Client **pp = &g_clients;
     while (*pp && *pp != c)
@@ -256,7 +265,7 @@ void togglefloating(void)
 {
     if (g_focused) {
         g_focused->floating = !g_focused->floating;
-        wm_send("%s %u %d", CMD_FLOAT, g_focused->id, g_focused->floating);   /* persiste (#33) */
-        send_frame();
+        send_frame();   /* audit #26: o CMD_FLOAT agora vai DENTRO do frame (atomico
+                         * com o layout), nao mais solto antes */
     }
 }

@@ -60,7 +60,10 @@ static void cfg_kv(const char *sec, const char *key, const char *val, void *ud)
     } else if (!_stricmp(key, "border")) {
         if (parse_int(val, &iv)) g_border = iv < 0 ? 0 : (iv > 32 ? 32 : iv);
     } else if (!_stricmp(key, "mod")) {
-        g_mod = !_stricmp(val, "win") ? MOD_WIN : MOD_ALT;
+        /* audit #28: aceita so alt|win; valor invalido mantem o default em vez
+         * de virar Alt silenciosamente */
+        if (!_stricmp(val, "win"))      g_mod = MOD_WIN;
+        else if (!_stricmp(val, "alt")) g_mod = MOD_ALT;
     }
 }
 
