@@ -24,12 +24,13 @@ static BOOL initd_up(void)
 
 static BOOL dispd_up(void)
 {
-    HANDLE h = CreateFileA(NTU_PIPE_DISPD, GENERIC_READ | GENERIC_WRITE,
-                           0, NULL, OPEN_EXISTING, 0, NULL);
-    if (h == INVALID_HANDLE_VALUE)
-        return GetLastError() == ERROR_PIPE_BUSY; /* ocupado = vivo */
-    CloseHandle(h);
-    return TRUE;
+    /* audit #78: NAO conecta no pipe do WM (instancia unica) — o CreateFile antigo
+     * roubava o slot do ntwm quando o pipe estava livre (boot/restart do WM) e
+     * gerava conexao-fantasma no dispd. WaitNamedPipe so CHECA se o pipe existe,
+     * sem ocupar a instancia. */
+    if (WaitNamedPipeA(NTU_PIPE_DISPD, 0))
+        return TRUE;                                   /* instancia livre -> up */
+    return GetLastError() != ERROR_FILE_NOT_FOUND;     /* existe mas ocupado = up */
 }
 
 static BOOL spawn(const char *cmdline, DWORD flags, PROCESS_INFORMATION *pi)
