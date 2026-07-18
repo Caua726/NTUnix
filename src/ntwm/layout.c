@@ -35,8 +35,12 @@ Client *cl_add(unsigned id, int ws, int floating)
     if (cl_find(id))
         return NULL;
     Client *c = (Client *)calloc(1, sizeof *c);
-    if (!c)
-        return NULL;
+    if (!c) {
+        /* audit #61: OOM -> o modelo do WM divergiria do dispd (janela existe la,
+         * nao aqui) e nao ha comando p/ pedir resync. Sai limpo; o initd respawna
+         * e o dispd manda um SYNC do zero (recuperacao lossless). */
+        exit(1);
+    }
     c->id = id;
     c->ws = ws;
     c->floating = floating;   /* restaura floating do snapshot (#33) */
