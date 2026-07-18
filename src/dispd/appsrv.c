@@ -312,9 +312,30 @@ static DWORD WINAPI worker_main(LPVOID arg)
                 ok = GetOverlappedResult(pipe, &ov, &n, FALSE);
             else { CancelIoEx(pipe, &ov); GetOverlappedResult(pipe, &ov, &n, TRUE); ok = FALSE; }
         }
-        if ((!ok && GetLastError() != ERROR_MORE_DATA) || n == 0)
+        int moredata = (!ok && GetLastError() == ERROR_MORE_DATA);
+        if ((!ok && !moredata) || n == 0)
             break;
         buf[n] = 0;
+        if (moredata) {
+            /* audit #35: mensagem > buffer -> processa o pedaco truncado e DRENA
+             * o resto (senao a cauda vira mensagem falsa no proximo read). Os
+             * bytes ja estao no pipe (MORE_DATA), entao os reads completam rapido. */
+            char sink[512];
+            for (;;) {
+                DWORD dn = 0;
+                OVERLAPPED dov;
+                ZeroMemory(&dov, sizeof dov);
+                dov.hEvent = c->rev;
+                ResetEvent(c->rev);
+                BOOL dok = ReadFile(pipe, sink, sizeof sink, &dn, &dov);
+                if (!dok && GetLastError() == ERROR_IO_PENDING) {
+                    WaitForSingleObject(c->rev, INFINITE);
+                    dok = GetOverlappedResult(pipe, &dov, &dn, FALSE);
+                }
+                if (dok || GetLastError() != ERROR_MORE_DATA)
+                    break;
+            }
+        }
 
         if (verb_is(buf, "APP-HELLO") && !created) {
             char *p = buf + 9;
