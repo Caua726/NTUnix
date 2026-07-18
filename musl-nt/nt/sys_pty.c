@@ -152,6 +152,30 @@ static nt_sc_t pty_read_raw(struct nt_fd *slot, void *buf, DWORD amount)
         if (e == ERROR_OPERATION_ABORTED) return -NT_EINTR;   /* Ctrl-C acordou */
         return nt_error(e);
     }
+    /* audit #108: VMIN>1 -> acumula ate VMIN bytes. VTIME=0: bloqueia ate ter VMIN;
+     * VTIME>0: timer INTER-BYTE (reinicia a cada byte, expira sem novos dados). */
+    {
+        unsigned vmin = g_tio.c_cc[NT_VMIN], vtime = g_tio.c_cc[NT_VTIME];
+        if (!(slot->flags & NT_O_NONBLOCK) && vmin > 1 && got > 0) {
+            ULONGLONG t0 = GetTickCount64();
+            while (got < vmin && got < amount) {
+                DWORD avail = 0;
+                if (!PeekNamedPipe(slot->handle, 0, 0, 0, &avail, 0))
+                    break;
+                if (avail == 0) {
+                    if (vtime > 0 && GetTickCount64() - t0 >= (ULONGLONG)vtime * 100)
+                        break;                       /* timeout inter-byte */
+                    Sleep(3);
+                    continue;
+                }
+                DWORD more = 0;
+                if (!ReadFile(slot->handle, (char *)buf + got, amount - got, &more, 0) || more == 0)
+                    break;
+                got += more;
+                t0 = GetTickCount64();               /* reinicia o timer inter-byte */
+            }
+        }
+    }
     return (nt_sc_t)got;
 }
 
