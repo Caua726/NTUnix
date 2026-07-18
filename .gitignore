@@ -1,6 +1,7 @@
 # === Artefatos de build ===
 out/
 build/work/
+build/deps/          # fontes externas baixadas (musl, busybox) + windows.iso
 musl-nt/build/
 *.o
 *.a

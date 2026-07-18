@@ -3,8 +3,17 @@
 
 CC     := x86_64-w64-mingw32-gcc
 CFLAGS := -O2 -Wall -Wextra -static -D_WIN32_WINNT=0x0601
-MUSL_SRC ?= /tmp/musl-1.2.6
-BUSYBOX_SRC ?= /tmp/bbsrc
+# fontes externas: baixadas pra build/deps (persistente, NAO /tmp) por `make deps`
+MUSL_SRC ?= $(CURDIR)/build/deps/musl-1.2.6
+BUSYBOX_SRC ?= $(CURDIR)/build/deps/busybox-1.37.0
+
+# VM libvirt que `make live` reinicia (override: VM_NAME=... VIRSH="...")
+VIRSH   ?= virsh -c qemu:///session
+VM_NAME ?= ntunix-live
+
+# ISO do Windows (base do WinPE): local padrao build/deps/windows.iso; nao e'
+# obrigatorio passar WIN_ISO — so ponha a ISO ali (ou passe WIN_ISO=/caminho.iso).
+WIN_ISO ?= $(CURDIR)/build/deps/windows.iso
 
 OUT := out
 BIN := $(OUT)/system/bin
@@ -94,41 +103,62 @@ stage-files: | $(BIN)
 smoke: all
 	./test/smoke.sh
 
-# ISO LIVE (arch-be-like): boota direto no NTUnix, sem instalar. Base = WinPE.
-#   make live WIN_ISO=/caminho/Win11.iso [OUT_ISO=NTUnix-live.iso]
-live: all
-	@test -n "$(WIN_ISO)" || { echo "uso: make live WIN_ISO=/caminho/Windows.iso"; exit 1; }
+# ISO LIVE: FAZ TUDO — deps + libc + busybox + tools + ISO — e reinicia a VM.
+# ISO do Windows: build/deps/windows.iso por padrao (ou WIN_ISO=/caminho.iso).
+#   make live                       (usa build/deps/windows.iso, reinicia a VM)
+#   make live WIN_ISO=/x.iso NO_BOOT=1   (ISO custom, sem reiniciar a VM)
+live:
+	@test -f "$(WIN_ISO)" || { echo "ISO do Windows nao encontrada: $(WIN_ISO)"; \
+		echo "  ponha a ISO em build/deps/windows.iso ou passe WIN_ISO=/caminho.iso"; exit 1; }
+	$(MAKE) busybox-nt          # deps + musl-nt + busybox (+ copia busybox.exe)
+	$(MAKE) all                 # dispd/ntwm/initd/... + stage
 	./build/make-live.sh "$(WIN_ISO)" $(OUT_ISO)
+	@if [ -z "$(NO_BOOT)" ] && command -v $(firstword $(VIRSH)) >/dev/null 2>&1; then \
+		echo ">> reiniciando a VM $(VM_NAME)"; \
+		$(VIRSH) destroy $(VM_NAME) 2>/dev/null || true; \
+		sleep 2; \
+		$(VIRSH) start $(VM_NAME); \
+	else \
+		echo ">> boot da VM pulado (NO_BOOT setado ou virsh ausente)"; \
+	fi
 
-# ISO instalavel (aplica o Windows completo estilo pacstrap). Fase posterior.
-#   make iso WIN_ISO=/caminho/Win11.iso [OUT_ISO=NTUnix.iso]
-iso: all
-	@test -n "$(WIN_ISO)" || { echo "uso: make iso WIN_ISO=/caminho/Windows.iso"; exit 1; }
+# ISO instalavel (aplica o Windows completo estilo pacstrap). FAZ TUDO tambem.
+#   make iso [WIN_ISO=/caminho/Win11.iso] [OUT_ISO=NTUnix.iso]
+iso:
+	@test -f "$(WIN_ISO)" || { echo "ISO do Windows nao encontrada: $(WIN_ISO)"; \
+		echo "  ponha a ISO em build/deps/windows.iso ou passe WIN_ISO=/caminho.iso"; exit 1; }
+	$(MAKE) busybox-nt
+	$(MAKE) all
 	./build/make-iso.sh "$(WIN_ISO)" $(OUT_ISO)
 
 # valida a base de build sem precisar de uma ISO (lint + dry-run)
 check-build: all
 	./test/build-check.sh
 
+# baixa as fontes externas (musl, busybox) pra build/deps — persistente, NAO /tmp.
+# Idempotente: no-op se ja presentes. Roda automatico antes dos builds que usam.
+deps:
+	./build/fetch-deps.sh
+
 # libc LP64 própria, sem UCRT. A fonte da musl e a do BusyBox são externas.
-musl-nt:
+musl-nt: deps
 	$(MAKE) -C musl-nt MUSL_SRC="$(MUSL_SRC)" all
 
-musl-nt-test:
+musl-nt-test: deps
 	$(MAKE) -C musl-nt MUSL_SRC="$(MUSL_SRC)" test
 
-busybox-nt:
+busybox-nt: deps
 	$(MAKE) -C musl-nt MUSL_SRC="$(MUSL_SRC)" \
 		BUSYBOX_SRC="$(BUSYBOX_SRC)" busybox
 	mkdir -p $(BIN)
 	cp musl-nt/build/busybox.exe $(BIN)/busybox.exe
 
-busybox-nt-test:
+busybox-nt-test: deps
 	$(MAKE) -C musl-nt MUSL_SRC="$(MUSL_SRC)" \
 		BUSYBOX_SRC="$(BUSYBOX_SRC)" busybox-test
 
 clean:
 	rm -rf $(OUT) build/work
 
-.PHONY: all clean stage-files smoke live iso check-build musl-nt \
+.PHONY: all clean stage-files smoke live iso check-build deps musl-nt \
 	musl-nt-test busybox-nt busybox-nt-test
