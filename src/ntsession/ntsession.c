@@ -96,7 +96,18 @@ int main(void)
         /* recuperacao: dispd nao subiu -> terminal ate ele voltar */
         PROCESS_INFORMATION pi;
         if (spawn(term, CREATE_NEW_CONSOLE, &pi)) {
-            WaitForSingleObject(pi.hProcess, INFINITE);
+            /* audit #6: espera o console OU o desktop voltar — o que vier antes.
+             * Antes o WaitForSingleObject(INFINITE) deixava o console de
+             * recuperacao pendurado SOBRE o desktop mesmo depois do dispd voltar. */
+            for (;;) {
+                if (WaitForSingleObject(pi.hProcess, 500) == WAIT_OBJECT_0)
+                    break;                      /* console encerrou */
+                if (dispd_up()) {               /* desktop no ar -> cede a tela */
+                    TerminateProcess(pi.hProcess, 0);
+                    WaitForSingleObject(pi.hProcess, 2000);
+                    break;
+                }
+            }
             CloseHandle(pi.hProcess);
             CloseHandle(pi.hThread);
         }

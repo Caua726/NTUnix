@@ -351,8 +351,10 @@ void input_mouse(int sx, int sy, int button, int press, int motion)
     int ix = w->rect.left + w->border_px;
     int iy = w->rect.top + w->border_px + g_srv.title_h;
     int cx = sx - ix, cy = sy - iy;
-    if (cx < 0) cx = 0;
-    if (cy < 0) cy = 0;
+    if (cx < 0 || cy < 0)   /* audit #4: clique na decoracao (borda/barra de titulo)
+                             * NAO vira clique no conteudo (antes clampava p/ 0 e
+                             * mandava APP-MOUSE em (x,0), ativando controle errado) */
+        return;
     if (w->cw > 0 && cx >= w->cw) cx = w->cw - 1;   /* audit #19: clampa no MAXIMO */
     if (w->ch > 0 && cy >= w->ch) cy = w->ch - 1;   /* (nao so no minimo) da surface */
     if (w->kind == WK_APP) {
