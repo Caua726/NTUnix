@@ -160,6 +160,11 @@ static void dxgi_present(PresentBackend *b, const Frame *f)
         g->dead = 1;   /* #100: para de apresentar em vez de rodar num device morto */
 }
 
+static int dxgi_lost(PresentBackend *b)   /* #86: device removido/resetado */
+{
+    return ((DxgiImpl *)b->impl)->dead;
+}
+
 static int dxgi_resize(PresentBackend *b, int w, int h)
 {
     DxgiImpl *g = (DxgiImpl *)b->impl;
@@ -204,6 +209,7 @@ PresentBackend *present_dxgi_create(void)
     b->name = "dxgi";
     b->init = dxgi_init;
     b->present = dxgi_present;
+    b->lost = dxgi_lost;
     b->resize = dxgi_resize;
     b->destroy = dxgi_destroy;
     b->impl = g;

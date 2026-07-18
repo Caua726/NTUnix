@@ -244,6 +244,24 @@ int term_win_visible(Terminal *t)   /* #103: backends nao enxergam Window */
     return !t || !t->win || t->win->visible;
 }
 
+/* audit #86: se o backend DXGI perdeu o device (GPU removida/resetada/TDR), troca
+ * pro GDI em vez de congelar. GDI e' software puro -> sempre funciona. */
+static void present_recover(void)
+{
+    if (!g_srv.present || !g_srv.present->lost || !g_srv.present->lost(g_srv.present))
+        return;
+    dispd_log("present: device DXGI perdido -> caindo no GDI");
+    dispd_toast("GPU resetada — usando render por software (GDI)");
+    g_srv.present->destroy(g_srv.present);
+    g_srv.present = present_gdi_create();
+    if (g_srv.present &&
+        g_srv.present->init(g_srv.present, g_srv.root, g_srv.scr_w, g_srv.scr_h) != 0) {
+        g_srv.present->destroy(g_srv.present);
+        g_srv.present = NULL;
+    }
+    g_srv.dirty = 1;
+}
+
 static int frame_tick(void)   /* retorna 1 se apresentou um quadro */
 {
     if (g_srv.selftest) {
@@ -252,6 +270,7 @@ static int frame_tick(void)   /* retorna 1 se apresentou um quadro */
     }
     wmproto_drain();
     appsrv_drain();
+    present_recover();   /* #86: DXGI perdeu o device -> troca pro GDI */
     input_process_keys();   /* roteia teclas enfileiradas pelo hook (#15) */
     reap_dead();
     if (!wmproto_connected())

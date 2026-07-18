@@ -72,6 +72,7 @@ PresentBackend *present_gdi_create(void)
     b->present = gdi_present;
     b->resize = gdi_resize;
     b->destroy = gdi_destroy;
+    b->lost = NULL;   /* GDI nunca "perde o device" (#86) */
     b->impl = g;
     return b;
 }

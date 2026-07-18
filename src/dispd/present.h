@@ -27,6 +27,7 @@ typedef struct PresentBackend {
     void (*present)(struct PresentBackend *b, const Frame *f);
     int  (*resize) (struct PresentBackend *b, int w, int h);
     void (*destroy)(struct PresentBackend *b);
+    int  (*lost)   (struct PresentBackend *b);   /* #86: device perdido -> trocar backend */
     void *impl;
 } PresentBackend;
 
