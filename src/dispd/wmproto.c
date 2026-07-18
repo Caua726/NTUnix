@@ -90,14 +90,6 @@ static char *q_pop(LONG *gen)
     return s;
 }
 
-static void q_clear(void)
-{
-    LONG gen;
-    char *s;
-    while ((s = q_pop(&gen)) != NULL)
-        free(s);
-}
-
 /* ---- escrita de eventos (main thread) ---- */
 
 static void wm_send(const char *line)
@@ -429,7 +421,9 @@ static void reset_wm_state(void)
     frame_clear();
     g_buffering = 0;
     g_srv.in_frame = 0;
-    q_clear();                  /* descarta comandos do WM morto (#66) */
+    /* audit #47: NAO limpa a fila aqui — isso apagava o HELLO da conexao NOVA.
+     * O bump de g_gen na desconexao ja invalida os comandos do WM morto (#66):
+     * o check `gen != cur` no drain os descarta ao popar. */
     InterlockedExchange(&g_overflow, 0);
     g_srv.dirty = 1;
 }
@@ -544,7 +538,11 @@ static DWORD WINAPI reader_main(LPVOID arg)
         free(acc);
 
         InterlockedExchange(&g_connected, 0);
-        InterlockedExchange(&g_need_reset, 1);   /* main reseta grabs/hello/fila */
+        InterlockedIncrement(&g_gen);            /* audit #47/#66: invalida os comandos
+                                                  * da conexao morta (o check de gen no
+                                                  * drain os descarta) — assim nao precisa
+                                                  * limpar a fila e apagar o HELLO da nova */
+        InterlockedExchange(&g_need_reset, 1);   /* main reseta grabs/hello */
         DisconnectNamedPipe(g_pipe);   /* re-arma para o proximo ntwm */
     }
     return 0;
