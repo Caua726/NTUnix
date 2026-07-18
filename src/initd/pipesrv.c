@@ -14,8 +14,17 @@
 static char g_resp[131072];
 static size_t g_len;
 
-#define ADD(...) (g_len += (size_t)snprintf(g_resp + g_len, \
-                        sizeof g_resp > g_len ? sizeof g_resp - g_len : 0, __VA_ARGS__))
+/* audit #76: snprintf devolve o que TERIA escrito; somar isso a g_len avancava
+ * ALEM do buffer (g_len > sizeof g_resp, e o WriteFile(g_len) lia OOB). Clampa
+ * o incremento ao espaco real restante. */
+static size_t resp_clamp(int n)
+{
+    if (n < 0) return 0;
+    size_t room = g_len < sizeof g_resp ? sizeof g_resp - 1 - g_len : 0;
+    return (size_t)n > room ? room : (size_t)n;
+}
+#define ADD(...) (g_len += resp_clamp(snprintf(g_resp + g_len, \
+                        sizeof g_resp > g_len ? sizeof g_resp - g_len : 0, __VA_ARGS__)))
 
 static const char *state_name(SvcState st)
 {

@@ -581,7 +581,17 @@ static void compose_one_window(Window *w, const RECT *clip)
                 FillRect(g_srv.cdc, &tb, tbb);
                 DeleteObject(tbb);
                 Terminal *tt = w->tabs[ti];
-                const char *base = (tt && tt->title[0]) ? tt->title : "sh";
+                char base[256] = "sh";
+                if (tt) {   /* audit #68: copia o titulo SOB o lock do terminal — o
+                             * reader escreve OSC concorrente; ler tt->title solto
+                             * era data race */
+                    EnterCriticalSection(&tt->lock);
+                    if (tt->title[0]) {
+                        strncpy(base, tt->title, sizeof base - 1);
+                        base[sizeof base - 1] = 0;
+                    }
+                    LeaveCriticalSection(&tt->lock);
+                }
                 char lbl[288];
                 snprintf(lbl, sizeof lbl, " %d %s", ti + 1, base);
                 SetTextColor(g_srv.cdc, act
