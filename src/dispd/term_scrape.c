@@ -65,13 +65,15 @@ static void scrape_frame(Terminal *t, Scrape *s)
             (SHORT)(csbi.srWindow.Left + cols - 1),
             (SHORT)(csbi.srWindow.Top + y0 + bh - 1)
         };
-        if (!ReadConsoleOutputA(s->conout, band, bsize, bcoord, &rd))
+        /* audit #100: ReadConsoleOutputW (nao A) -> caracteres Unicode reais em
+         * vez do byte ANSI corrompido (cmd/powershell com acentos/UTF-16) */
+        if (!ReadConsoleOutputW(s->conout, band, bsize, bcoord, &rd))
             continue;
         for (int y = 0; y < bh; y++) {
             for (int x = 0; x < cols; x++) {
                 CHAR_INFO *ci = &band[y * cols + x];
                 Cell *c = &t->grid[(y0 + y) * t->cols + x];
-                unsigned char ch = (unsigned char)ci->Char.AsciiChar;
+                unsigned ch = (unsigned)ci->Char.UnicodeChar;
                 c->ch = ch ? ch : ' ';
                 c->fg = vt_ansi_color(win_to_ansi(ci->Attributes, 0));
                 c->bg = vt_ansi_color(win_to_ansi(ci->Attributes, 1));
