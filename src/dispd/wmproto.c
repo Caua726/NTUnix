@@ -213,6 +213,15 @@ void wmproto_ev_wsreq(int ws)
     wm_send(b);
 }
 
+/* audit #5: o usuario arrastou uma janela floating -> o WM guarda a geometria e
+ * passa a declara-la (em vez da cascata) nos proximos frames. */
+void wmproto_ev_moved(unsigned id, int x, int y, int w, int h)
+{
+    char b[64];
+    snprintf(b, sizeof b, "%s %u %d %d %d %d", EVT_MOVED, id, x, y, w, h);
+    wm_send(b);
+}
+
 static void send_snapshot(void)
 {
     char b[512];

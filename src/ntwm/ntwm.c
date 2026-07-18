@@ -193,6 +193,14 @@ static void handle(char *line)
         wm_send("%s", CMD_PONG);    /* heartbeat: prova de vida pro dispd (#62) */
     } else if (!strcmp(verb, EVT_WSREQ) && n >= 2) {
         view(atoi(av[1]));          /* #3: usuario clicou o workspace na barra */
+    } else if (!strcmp(verb, EVT_MOVED) && n >= 6) {
+        Client *c = cl_find((unsigned)strtoul(av[1], NULL, 10));   /* #5: arrasto */
+        if (c) {
+            c->fx = atoi(av[2]); c->fy = atoi(av[3]);
+            c->fw = atoi(av[4]); c->fh = atoi(av[5]);
+            c->has_geom = 1;
+            send_frame();
+        }
     }
 }
 

@@ -169,6 +169,11 @@ void send_frame(void)
         int y = g_wy + (g_wh - h) / 2 + step;
         if (x + w > g_wx + g_ww) x = g_wx + g_ww - w;
         if (y + h > g_wy + g_wh) y = g_wy + g_wh - h;
+        if (c->has_geom) {   /* audit #5/#29: geometria persistida do arrasto */
+            w = c->fw < 40 ? 40 : c->fw;
+            h = c->fh < 30 ? 30 : c->fh;
+            x = c->fx; y = c->fy;
+        }
         int z = (c == g_focused) ? 2000 : (1000 + fi);
         wm_send("%s %u %d %d %d %d %d %d", CMD_PLACE, c->id, x, y, w, h,
                 g_curws, z);

@@ -130,6 +130,7 @@ void     wmproto_ev_focused(Window *w);   /* foco mudou no dispd (ex.: mouse) */
 void     wmproto_ev_key(unsigned mods, unsigned vk);
 void     wmproto_ev_output(void);   /* #85: tela mudou -> WM re-tila */
 void     wmproto_ev_wsreq(int ws);  /* #3: usuario clicou um workspace na barra */
+void     wmproto_ev_moved(unsigned id, int x, int y, int w, int h);  /* #5: arrasto */
 
 /* appsrv.c — fronteira apps<->dispd (surface compartilhada via section) */
 void     appsrv_start(void);   /* sobe o servidor multi-cliente (thread) */

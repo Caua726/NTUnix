@@ -317,9 +317,31 @@ int input_hook_active(void)
 /* ---- mouse: encaminha ao app ou terminal sob o cursor ---- */
 
 static unsigned g_capture_wid;   /* audit #18: janela que capturou o mouse no down */
+static unsigned g_drag_wid;      /* audit #5: janela floating sendo arrastada */
+static int      g_drag_dx, g_drag_dy;   /* offset do cursor dentro da janela */
 
 void input_mouse(int sx, int sy, int button, int press, int motion)
 {
+    /* audit #5: arrasto de janela floating pela barra de titulo (i3-style). Move
+     * o rect na hora (feedback) e, no release, manda MOVED pro WM persistir a
+     * geometria (senao o proximo frame do WM devolveria a janela pra cascata). */
+    if (g_drag_wid) {
+        Window *dw = win_find(g_drag_wid);
+        if (dw && motion) {
+            int wpx = dw->rect.right - dw->rect.left, hpx = dw->rect.bottom - dw->rect.top;
+            int nx = sx - g_drag_dx, ny = sy - g_drag_dy;
+            SetRect(&dw->rect, nx, ny, nx + wpx, ny + hpx);
+            g_srv.dirty = 1;
+        } else {   /* release (ou a janela sumiu) -> encerra e persiste */
+            if (dw)
+                wmproto_ev_moved(dw->id, dw->rect.left, dw->rect.top,
+                                 dw->rect.right - dw->rect.left,
+                                 dw->rect.bottom - dw->rect.top);
+            g_drag_wid = 0;
+        }
+        return;
+    }
+
     /* audit #18: entre o down e o ultimo release, TODOS os eventos vao pra mesma
      * janela (senao um up que sai da janela A vira up em B, e A acha que o botao
      * continua pressionado) */
@@ -337,6 +359,17 @@ void input_mouse(int sx, int sy, int button, int press, int motion)
     }
     if (press && !motion && button < 64)   /* primeiro botao (nao roda) -> captura */
         g_capture_wid = w->id;
+
+    /* audit #5: janela floating -> comeca o arrasto ao apertar na barra de titulo */
+    if (w->floating && button == 0 && press && !motion && g_srv.title_h > 0) {
+        int tby = w->rect.top + w->border_px;
+        if (sy >= tby && sy < tby + g_srv.title_h) {
+            g_drag_wid = w->id;
+            g_drag_dx = sx - w->rect.left;
+            g_drag_dy = sy - w->rect.top;
+            return;
+        }
+    }
 
     /* clique na barra de abas -> troca de aba */
     if (w->kind == WK_TERM && w->ntabs > 0 && button == 0 && press && !motion) {

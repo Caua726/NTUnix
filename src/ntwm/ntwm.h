@@ -15,6 +15,8 @@ typedef struct Client {
     unsigned id;
     int      ws;
     int      floating;
+    int      fx, fy, fw, fh;   /* #5/#29: geometria floating persistida (arrasto) */
+    int      has_geom;         /* 0 = usa a cascata; 1 = usa fx/fy/fw/fh */
     char     title[128];
     struct Client *next;
 } Client;

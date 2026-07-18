@@ -44,6 +44,7 @@
 #define EVT_ERR        "ERR"          /* ERR <motivo...> */
 #define EVT_PING       "PING"         /* dispd -> ntwm: heartbeat (espera PONG) #62 */
 #define EVT_WSREQ      "WSREQ"        /* dispd -> ntwm: usuario pediu workspace <n> #3 */
+#define EVT_MOVED      "MOVED"        /* dispd -> ntwm: MOVED <wid> <x> <y> <w> <h> #5 */
 
 /* comandos ntwm -> dispd */
 #define CMD_HELLO      "HELLO"        /* HELLO ntwm <ver> */
