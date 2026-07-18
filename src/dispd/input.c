@@ -161,13 +161,16 @@ static void route_key(unsigned mods, DWORD vk, DWORD scan, int down)
     WCHAR wb[8];
     int r = 0;
     if (down) {
-        int altgr = (GetAsyncKeyState(VK_RMENU) & 0x8000) != 0;
+        /* audit #15: estado COMPLETO do teclado (NumLock, toggles, extended),
+         * nao so Shift/Ctrl/AltGr/Caps; depois sobrepoe os mods do EVENTO (o
+         * estado async pode ter mudado ate o drain). #14: so no keydown. */
         BYTE ks[256];
-        memset(ks, 0, sizeof ks);
-        if (mods & MOD_SHIFT) ks[VK_SHIFT] = 0x80;
-        if (mods & MOD_CTRL)  ks[VK_CONTROL] = 0x80;
-        if (altgr) { ks[VK_CONTROL] = 0x80; ks[VK_MENU] = 0x80; }
-        if (GetKeyState(VK_CAPITAL) & 1) ks[VK_CAPITAL] = 1;
+        if (!GetKeyboardState(ks))
+            memset(ks, 0, sizeof ks);
+        int altgr = (GetAsyncKeyState(VK_RMENU) & 0x8000) != 0;
+        ks[VK_SHIFT]   = (BYTE)((mods & MOD_SHIFT) ? 0x80 : (ks[VK_SHIFT] & 0x80));
+        ks[VK_CONTROL] = (BYTE)(((mods & MOD_CTRL) || altgr) ? 0x80 : (ks[VK_CONTROL] & 0x80));
+        if (altgr) ks[VK_MENU] = 0x80;
         r = ToUnicodeEx((UINT)vk, (UINT)scan, ks, wb, 8, 0, GetKeyboardLayout(0));
     }
 
