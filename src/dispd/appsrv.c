@@ -235,7 +235,14 @@ static DWORD WINAPI worker_main(LPVOID arg)
     AppConn *c = (AppConn *)calloc(1, sizeof *c);
     if (!c) { InterlockedDecrement(&g_nconns); CloseHandle(pipe); return 0; }
     c->pipe = pipe;
-    GetNamedPipeClientProcessId(pipe, &c->pid);   /* dono da conexao (#52) */
+    if (!GetNamedPipeClientProcessId(pipe, &c->pid) || c->pid == 0) {
+        /* audit #40: sem PID confirmado nao da pra encerrar o processo ao fechar
+         * a janela -> rejeita a conexao (identidade nao confirmada) */
+        CloseHandle(pipe);
+        free(c);
+        InterlockedDecrement(&g_nconns);
+        return 0;
+    }
     c->rev = CreateEventA(NULL, TRUE, FALSE, NULL);
     c->wev = CreateEventA(NULL, TRUE, FALSE, NULL);
     c->ready = CreateEventA(NULL, TRUE, FALSE, NULL);
@@ -253,7 +260,10 @@ static DWORD WINAPI worker_main(LPVOID arg)
 
     int created = 0;
     char buf[512];
+    ULONGLONG t0 = GetTickCount64();   /* audit #36: deadline ABSOLUTO de handshake */
     for (;;) {
+        if (!created && GetTickCount64() - t0 > 8000)
+            break;   /* nao completou o HELLO/CREATE a tempo (junk repetido) */
         DWORD n = 0;
         OVERLAPPED ov;
         ZeroMemory(&ov, sizeof ov);
@@ -282,8 +292,11 @@ static DWORD WINAPI worker_main(LPVOID arg)
             ntu_trim(title);
             if (w < 1) w = 200;
             if (h < 1) h = 100;
-            if (w > 2048) w = 2048;   /* teto de superficie: <=16MB/app (#128) */
-            if (h > 2048) h = 2048;
+            /* audit #37: teto por-surface baixado p/ 1024 (<=4MB/app) — 32 apps
+             * x 4MB = 128MB = MemoryMax; antes 2048 dava 32x16MB = 512MB > limite.
+             * (orcamento AGREGADO por bytes = refinamento futuro.) */
+            if (w > 1024) w = 1024;
+            if (h > 1024) h = 1024;
 
             char name[80];
             LONG id = InterlockedIncrement(&g_appctr);
@@ -362,8 +375,14 @@ static DWORD WINAPI accept_main(LPVOID arg)
         BOOL con = ConnectNamedPipe(pipe, &cov)
                        ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
         if (!con && GetLastError() == ERROR_IO_PENDING) {
-            WaitForSingleObject(cev, INFINITE);
-            con = TRUE;
+            /* audit #41: valida a conclusao do connect (nao assume con=TRUE) */
+            if (WaitForSingleObject(cev, INFINITE) == WAIT_OBJECT_0) {
+                DWORD dummy;
+                con = GetOverlappedResult(pipe, &cov, &dummy, FALSE);
+            } else {
+                CancelIoEx(pipe, &cov);
+                con = FALSE;
+            }
         }
         CloseHandle(cev);
         if (!con) { CloseHandle(pipe); continue; }
@@ -380,6 +399,11 @@ void appsrv_start(void)
     InitializeCriticalSection(&g_aqlock);
     InitializeCriticalSection(&g_conns_lock);
     HANDLE t = CreateThread(NULL, 0, accept_main, NULL, 0, NULL);
-    if (t) CloseHandle(t);
-    dispd_log("appsrv: ouvindo em %s", NTU_PIPE_DISPD_APP);
+    if (t) {                          /* audit #42: so loga 'ouvindo' se a thread subiu */
+        CloseHandle(t);
+        dispd_log("appsrv: ouvindo em %s", NTU_PIPE_DISPD_APP);
+    } else {
+        dispd_log("appsrv: CreateThread(accept) falhou (%lu) — apps indisponiveis",
+                  GetLastError());
+    }
 }
