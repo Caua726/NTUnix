@@ -160,7 +160,11 @@ void send_frame(void)
         if (c->ws != g_curws || !c->floating)
             continue;
         int w = g_ww / 2, h = g_wh / 2;
-        int step = fi * 28;
+        /* audit #24: a cascata ENVOLVE (wrap) em vez de saturar todas no canto —
+         * o offset dá a volta a cada N janelas conforme o espaço disponivel */
+        int nsteps = (g_ww / 2) / 28;
+        if (nsteps < 1) nsteps = 1;
+        int step = (fi % nsteps) * 28;
         int x = g_wx + (g_ww - w) / 2 + step;
         int y = g_wy + (g_wh - h) / 2 + step;
         if (x + w > g_wx + g_ww) x = g_wx + g_ww - w;
