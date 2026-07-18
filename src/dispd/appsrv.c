@@ -64,11 +64,20 @@ static int aq_push(const AqItem *it)
 }
 
 /* teardown/create nao podem ser descartados (senao vaza section/conexao ou
- * deixa janela fantasma, #55/#56). O main drena a cada frame -> spin curto. */
+ * deixa janela fantasma, #55/#56). O main drena a cada frame -> spin curto.
+ * audit #34: mas NAO gira pra sempre se o main parou de drenar (travou/shutdown)
+ * -> desiste apos ~5s e libera o recurso do item pra nao vazar. */
 static void aq_push_reliable(const AqItem *it)
 {
-    while (!aq_push(it))
+    int tries = 0;
+    while (!aq_push(it)) {
+        if (++tries > 5000) {
+            if (it->type == AQ_CREATE && it->section)
+                CloseHandle(it->section);
+            return;
+        }
         Sleep(1);
+    }
 }
 
 static int aq_pop(AqItem *out)
