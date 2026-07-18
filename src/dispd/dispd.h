@@ -101,6 +101,7 @@ Window  *win_at_point(int x, int y);   /* topo visivel no ws atual */
 
 /* input.c — teclado: hook LL global (enfileira) + WM_KEYDOWN fallback */
 void     input_install_hook(void);
+void     input_hook_refresh(void);   /* #13: reinstala o hook (auto-cura) */
 void     input_process_keys(void);   /* main thread: drena e roteia (frame_tick) */
 int      input_hook_active(void);
 void     input_key(unsigned vk, unsigned scan);     /* fallback WM_KEYDOWN */

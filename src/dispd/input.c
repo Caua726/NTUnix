@@ -360,8 +360,7 @@ void input_install_hook(void)
 {
     char d[8] = "";
     GetEnvironmentVariableA("DISPD_DEBUG", d, sizeof d);
-    g_srv.debug = 1;   /* TEMP DIAGNOSTICO: forca k:N/rx na barra (reverter p/ (d[0]=='1')) */
-    (void)d;
+    g_srv.debug = (d[0] == '1');   /* audit #1: diagnostico so com DISPD_DEBUG=1 */
 
     g_hook = SetWindowsHookExA(WH_KEYBOARD_LL, ll_proc, GetModuleHandleA(NULL), 0);
     if (!g_hook)
@@ -369,4 +368,18 @@ void input_install_hook(void)
                   GetLastError());
     else
         dispd_log("input: hook de teclado LL instalado");
+}
+
+/* audit #13: o Windows remove o hook LL silenciosamente (ex.: se o proc demora
+ * demais) e g_hook continuaria != NULL -> o fallback WM_KEYDOWN ficaria desligado
+ * e o teclado morreria. Chamado periodicamente pelo loop de frame: desinstala
+ * (g_hook=NULL, entao a janelinha ate o rehook e coberta pelo fallback) e
+ * reinstala fresco. Tambem cura um handle stale (Unhook falha inofensivo). */
+void input_hook_refresh(void)
+{
+    if (g_hook) {
+        UnhookWindowsHookEx(g_hook);
+        g_hook = NULL;
+    }
+    g_hook = SetWindowsHookExA(WH_KEYBOARD_LL, ll_proc, GetModuleHandleA(NULL), 0);
 }
