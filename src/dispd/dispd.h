@@ -105,6 +105,8 @@ void     win_set_client_size(Window *w, int cw, int ch);
 void     win_focus(Window *w);
 void     compose_and_present(void);
 int      compositor_animating(void);   /* #35: ha janela animando -> manter frames */
+void     compositor_ghost_capture(const RECT *r);  /* #103: snapshot p/ fade-out */
+int      compositor_ghosts_active(void);           /* #103: ha fade em andamento */
 int      bar_ws_at(int x, int y);      /* #3: workspace clicado na barra (-1 = nenhum) */
 Window  *win_at_point(int x, int y);   /* topo visivel no ws atual */
 

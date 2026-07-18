@@ -603,7 +603,9 @@ static COLORREF border_color(Window *w)
 
 int compositor_animating(void)
 {
-    if (g_srv.toast_ms != 0)   /* #2: toast ativo -> mantem quadros ate expirar */
+    if (g_srv.toast_ms != 0)      /* #2: toast ativo -> mantem quadros ate expirar */
+        return 1;
+    if (compositor_ghosts_active())  /* #103: fade-out de janela fechando */
         return 1;
     if (!anim_enabled())
         return 0;
@@ -948,6 +950,75 @@ static void draw_toast(void)
     SelectObject(dc, of);
 }
 
+/* audit #103: fade-out ao fechar via GHOST — copia a aparencia da janela do
+ * backbuffer ANTES de destrui-la (lifecycle inalterado) e faz fade por cima do
+ * layout re-tilado. Seguro: nao mexe no ciclo de vida da janela. */
+#define GHOST_MS 170
+#define MAX_GHOSTS 6
+typedef struct { void *bits; int w, h; RECT rect; ULONGLONG ms; } Ghost;
+static Ghost g_ghosts[MAX_GHOSTS];
+
+void compositor_ghost_capture(const RECT *r)
+{
+    if (!anim_enabled() || !g_srv.cbits)
+        return;
+    int w = r->right - r->left, h = r->bottom - r->top;
+    if (w < 1 || h < 1 || w > 4096 || h > 4096)
+        return;
+    Ghost *g = NULL;
+    for (int i = 0; i < MAX_GHOSTS; i++)
+        if (g_ghosts[i].ms == 0) { g = &g_ghosts[i]; break; }
+    if (!g) return;
+    g->bits = malloc((size_t)w * h * 4);
+    if (!g->bits) return;
+    const unsigned char *src = (const unsigned char *)g_srv.cbits;
+    int stride = g_srv.frame.stride;
+    for (int y = 0; y < h; y++) {
+        int sy = r->top + y;
+        if (sy < 0 || sy >= g_srv.scr_h) continue;
+        memcpy((char *)g->bits + (size_t)y * w * 4,
+               src + (size_t)sy * stride + (size_t)r->left * 4, (size_t)w * 4);
+    }
+    g->w = w; g->h = h; g->rect = *r; g->ms = GetTickCount64();
+}
+
+static void draw_ghosts(void)
+{
+    unsigned char *dst = (unsigned char *)g_srv.cbits;
+    if (!dst) return;
+    int stride = g_srv.frame.stride, W = g_srv.scr_w, H = g_srv.scr_h;
+    for (int i = 0; i < MAX_GHOSTS; i++) {
+        Ghost *g = &g_ghosts[i];
+        if (g->ms == 0) continue;
+        ULONGLONG el = GetTickCount64() - g->ms;
+        if (el >= GHOST_MS) { free(g->bits); g->bits = NULL; g->ms = 0; continue; }
+        int a = 255 - (int)(el * 255 / GHOST_MS), ia = 255 - a;   /* fade out */
+        const unsigned char *gb = (const unsigned char *)g->bits;
+        for (int y = 0; y < g->h; y++) {
+            int dy = g->rect.top + y;
+            if (dy < 0 || dy >= H) continue;
+            unsigned char *drow = dst + (size_t)dy * stride;
+            const unsigned char *grow = gb + (size_t)y * g->w * 4;
+            for (int x = 0; x < g->w; x++) {
+                int dxp = g->rect.left + x;
+                if (dxp < 0 || dxp >= W) continue;
+                unsigned char *d = drow + dxp * 4;
+                const unsigned char *s = grow + x * 4;
+                d[0] = (unsigned char)((s[0]*a + d[0]*ia) / 255);
+                d[1] = (unsigned char)((s[1]*a + d[1]*ia) / 255);
+                d[2] = (unsigned char)((s[2]*a + d[2]*ia) / 255);
+            }
+        }
+    }
+}
+
+int compositor_ghosts_active(void)
+{
+    for (int i = 0; i < MAX_GHOSTS; i++)
+        if (g_ghosts[i].ms != 0) return 1;
+    return 0;
+}
+
 /* apresenta o quadro; sub != NULL -> so o sub-retangulo (damage) */
 static void present_frame(const RECT *sub)
 {
@@ -975,6 +1046,7 @@ void compose_and_present(void)
     if (g_srv.dirty || !damage_enabled()) {
         RECT full = { 0, 0, g_srv.scr_w, g_srv.scr_h };
         compose_region(&full);
+        draw_ghosts();           /* #103: fade-out das janelas fechando */
         draw_toast();            /* #2: overlay de feedback por cima de tudo */
         present_frame(NULL);
         g_srv.dirty = 0;

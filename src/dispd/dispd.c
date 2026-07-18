@@ -151,6 +151,8 @@ void dispd_close_window(Window *w)
         return;
     unsigned id = w->id;
     int is_app = (w->kind == WK_APP);
+    if (w->visible && w->ws == g_srv.cur_ws)   /* #103: fade-out ao fechar */
+        compositor_ghost_capture(&w->rect);
     win_destroy(w);
     wmproto_ev_destroyed(id);
     if (is_app)
