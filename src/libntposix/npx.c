@@ -1,6 +1,12 @@
 /*
  * npx.c — libntposix v0, backend Win32.
  *
+ * audit #126: EXPERIMENTAL/LEGADO. Este backend duplica FDs/processos que a
+ * musl-nt (em musl-nt/nt) ja implementa de forma mais completa e e' o caminho
+ * de fato do runtime. Mantido so como referencia da migracao p/ Native API;
+ * NAO deve ser consumido em codigo novo (use a musl-nt). Consolidar/remover
+ * quando a migracao ntdll (abaixo) for retomada.
+ *
  * Cada grupo de funcoes tem um "TODO Native API" apontando a chamada ntdll
  * que vai substituir o Win32 numa fase posterior (docs/pesquisa/
  * nt-native-api.md). A troca e local: a interface em npx.h nao muda.
