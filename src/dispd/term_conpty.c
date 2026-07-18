@@ -140,6 +140,12 @@ static int conpty_start(Terminal *t, const char *cmdline, int cols, int rows)
     CloseHandle(pi.hThread);
     c->hproc = pi.hProcess;
     t->pid = pi.dwProcessId;
+
+    /* liga o libvterm ANTES da leitora, senao os primeiros bytes se perdem */
+    if (vt_use_libvterm(t) != 0) {
+        TerminateProcess(pi.hProcess, 1);
+        goto fail;
+    }
     c->reader = CreateThread(NULL, 0, reader_main, t, 0, NULL);
     if (!c->reader) {              /* sem leitora o terminal fica morto */
         TerminateProcess(pi.hProcess, 1);

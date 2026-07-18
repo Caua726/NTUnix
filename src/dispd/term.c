@@ -50,40 +50,7 @@ void term_input(Terminal *t, const char *bytes, int n)
         t->be->input(t, bytes, n);
 }
 
-/* encaminha mouse ao pty conforme o modo de rastreio negociado pelo programa
- * (?1000 normal, ?1002 button-event, ?1003 any-event; ?1006 encode SGR). */
-void term_mouse(Terminal *t, int col, int row, int button, int press, int motion)
-{
-    if (!t || !t->backend_is_pty || t->mode_mouse == 0)
-        return;
-    int mm = t->mode_mouse;
-    if (motion) {
-        /* 1003(any)=bit 0x4; 1002(button)=bit 0x2 e so com botao pressionado */
-        if (!(mm & 0x4) && !((mm & 0x2) && button >= 0))
-            return;
-    }
-    if (col < 0) col = 0;
-    if (row < 0) row = 0;
-    char seq[32];
-    int n;
-    if (t->mode_mouse_sgr) {              /* ?1006: ESC[<b;x;y(M|m) */
-        int b = (button < 0) ? 0 : button;
-        if (motion) b += 32;
-        n = snprintf(seq, sizeof seq, "\x1b[<%d;%d;%d%c", b, col + 1, row + 1,
-                     press ? 'M' : 'm');
-    } else {                             /* legado: ESC[M cb cx cy (bytes) */
-        int b = press ? (button < 0 ? 0 : button) : (button >= 64 ? button : 3);
-        if (motion) b += 32;
-        int cx = col + 1, cy = row + 1;
-        if (cx > 223) cx = 223;
-        if (cy > 223) cy = 223;
-        seq[0] = 0x1b; seq[1] = '['; seq[2] = 'M';
-        seq[3] = (char)(32 + b); seq[4] = (char)(32 + cx); seq[5] = (char)(32 + cy);
-        n = 6;
-    }
-    if (t->be && t->be->input && n > 0)
-        t->be->input(t, seq, n);
-}
+/* term_mouse esta em vt.c (usa o encoder de mouse do libvterm) */
 
 void term_resize(Terminal *t, int cols, int rows)
 {

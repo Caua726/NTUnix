@@ -55,9 +55,19 @@ $(OUT)/obj/term_conpty.o: src/dispd/term_conpty.c src/dispd/term.h | $(OUT)/obj
 $(OUT)/obj/present_dxgi.o: src/dispd/present_dxgi.c src/dispd/present.h | $(OUT)/obj
 	$(CC) $(filter-out -D_WIN32_WINNT=0x0601,$(CFLAGS)) -D_WIN32_WINNT=0x0A00 -c -o $@ $<
 
+# libvterm (third_party, MIT): engine VT do vim/neovim. C portavel; compilado
+# como objetos com -w (nao poluir com warnings de terceiros). vt.c usa a API.
+LIBVTERM_DIR := third_party/libvterm
+LIBVTERM_INC := -I$(LIBVTERM_DIR)/include -I$(LIBVTERM_DIR)/src
+LIBVTERM_SRC := $(wildcard $(LIBVTERM_DIR)/src/*.c)
+LIBVTERM_OBJ := $(patsubst $(LIBVTERM_DIR)/src/%.c,$(OUT)/obj/vterm_%.o,$(LIBVTERM_SRC))
+
+$(OUT)/obj/vterm_%.o: $(LIBVTERM_DIR)/src/%.c | $(OUT)/obj
+	$(CC) -O2 -static -D_WIN32_WINNT=0x0601 $(LIBVTERM_INC) -w -c -o $@ $<
+
 # compositor: GUI nativo. term_conpty/present_dxgi ja compilados a 0x0A00.
-$(BIN)/dispd.exe: $(DISPD_SRC) $(OUT)/obj/term_conpty.o $(OUT)/obj/present_dxgi.o $(COMMON) $(DISPD_HDR) | $(BIN)
-	$(CC) $(CFLAGS) -mwindows -o $@ $(DISPD_SRC) $(OUT)/obj/term_conpty.o $(OUT)/obj/present_dxgi.o $(COMMON) -lgdi32 -luser32 -ldxguid
+$(BIN)/dispd.exe: $(DISPD_SRC) $(OUT)/obj/term_conpty.o $(OUT)/obj/present_dxgi.o $(LIBVTERM_OBJ) $(COMMON) $(DISPD_HDR) | $(BIN)
+	$(CC) $(CFLAGS) $(LIBVTERM_INC) -mwindows -o $@ $(DISPD_SRC) $(OUT)/obj/term_conpty.o $(OUT)/obj/present_dxgi.o $(LIBVTERM_OBJ) $(COMMON) -lgdi32 -luser32 -ldxguid
 
 # window manager: so pipe + logica, sem libs extras.
 $(BIN)/ntwm.exe: $(NTWM_SRC) $(COMMON) src/common/ntu.h src/common/ntuwm.h src/ntwm/ntwm.h | $(BIN)

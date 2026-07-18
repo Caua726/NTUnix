@@ -1,15 +1,12 @@
 /*
  * term.h — terminal hospedado pelo dispd.
  *
- * Cada janela WK_TERM tem um Terminal: um processo filho (busybox ash) cujo
- * stream VT e' lido por uma thread e parseado (vt.c) numa grade de celulas;
- * o compositor renderiza a grade no DIB da janela. Backends de hosting atras
- * de TerminalBackend: ConPTY (primario) e scrape (fallback, console oculto).
- *
- * O parser (vt.c) e' uma maquina de estados VT completa (modelada no st/xterm):
- * CSI amplo, tela alternada, regiao de rolagem, save/restore de cursor, e
- * RESPONDE a queries (DSR/CPR/DA) escrevendo de volta no pty — sem isso o
- * busybox lineedit trava esperando a posicao do cursor.
+ * O emulador VT e' o libvterm (third_party/libvterm) — engine do vim/neovim,
+ * robusto e completo (responde DSR/DA/CPR sozinho, alt-screen, scroll region,
+ * mouse, cores). O caminho ConPTY alimenta bytes no libvterm (vt_feed) e o
+ * compositor le a grade de celulas do libvterm (vt_render). O fallback scrape
+ * (console oculto, WinPE sem ConPTY) escreve numa grade simples propria — por
+ * isso `grid` continua existindo e o render tem dois caminhos.
  */
 #ifndef DISPD_TERM_H
 #define DISPD_TERM_H
@@ -18,87 +15,49 @@
 
 struct Window;
 
-/* atributos de celula */
+/* atributos de celula (usados pelo caminho scrape; o libvterm traz os seus) */
 #define ATTR_BOLD      0x01
 #define ATTR_REVERSE   0x02
 #define ATTR_UNDERLINE 0x04
-#define ATTR_ITALIC    0x08
-#define ATTR_DIM       0x10
-#define ATTR_BLINK     0x20
-#define ATTR_INVIS     0x40
-#define ATTR_WDUMMY    0x80   /* metade direita de um caractere largo */
 
 typedef struct Cell {
     unsigned int   ch;    /* codepoint Unicode (0/espaco = vazio) */
-    COLORREF       fg;    /* cor resolvida (RGB) — suporta truecolor */
+    COLORREF       fg;    /* cor resolvida (RGB) */
     COLORREF       bg;    /* cor resolvida (RGB) */
     unsigned short attr;  /* ATTR_* */
 } Cell;
 
-/* estados do parser VT */
-enum { VT_GROUND = 0, VT_ESC, VT_ESC_INT, VT_CSI, VT_CSI_INT, VT_OSC, VT_STR };
-
-#define VT_MAXPARAMS 16
-#define VT_REPLYCAP  64
-#define VT_OSCCAP    512
-
 typedef struct Terminal {
     struct TerminalBackend *be;
     void  *impl;              /* privado do backend */
-    int    backend_is_pty;    /* 1=ConPTY: aceita respostas a queries (write-back) */
+    int    backend_is_pty;    /* 1=ConPTY: usa libvterm + aceita write-back */
 
     int    cols, rows;
-    Cell  *grid;              /* tela ativa: cols*rows, [row*cols + col] */
-    Cell  *grid_main;         /* buffer da tela primaria */
-    Cell  *grid_alt;          /* buffer da tela alternada */
-    int    on_alt;            /* 1 = usando a tela alternada */
 
-    int    cur_x, cur_y;
+    /* emulador libvterm (caminho ConPTY/VT); NULL no caminho scrape */
+    void  *vt;                /* VTerm*        (opaco aqui) */
+    void  *vts;               /* VTermScreen*  (opaco aqui) */
+    int    cur_x, cur_y;      /* cursor (via callback do libvterm / scrape) */
     int    cur_vis;
-    int    wrap_pending;      /* autowrap adiado (escreveu na ultima coluna) */
-    int    scroll_top, scroll_bot;   /* regiao de rolagem (0-based, inclusivo) */
 
-    /* modos */
-    int    mode_autowrap;     /* DECAWM (default on) */
-    int    mode_origin;       /* DECOM: cursor relativo a regiao de rolagem */
-    int    mode_appcursor;    /* DECCKM: setas em ESC O_ */
-    int    mode_bracketed;    /* ?2004: bracketed paste */
-    int    mode_mouse;        /* bitmask: modos de rastreio de mouse (?1000/1002/1003) */
-    int    mode_mouse_sgr;    /* ?1006: encode SGR do mouse */
+    /* grade simples do fallback scrape (usada so quando vt == NULL) */
+    Cell  *grid;
 
-    volatile int dirty;       /* conteudo mudou desde o ultimo render */
+    volatile int  dirty;      /* conteudo mudou desde o ultimo render */
     volatile long alive;      /* filho ainda vivo (Interlocked) */
     volatile long rx;         /* diagnostico: bytes vindos do filho (Interlocked) */
     DWORD  pid;               /* PID do processo filho */
 
-    struct Window *win;       /* dono (usado pelo compositor, nao pelo vt) */
-    CRITICAL_SECTION lock;    /* grade tocada pela thread leitora */
+    struct Window *win;       /* dono (usado pelo compositor) */
+    CRITICAL_SECTION lock;    /* protege o modelo (libvterm/grade) e o cursor */
 
-    char   title[256];        /* titulo via OSC 0/2 (escrito sob lock) */
+    char   title[256];        /* titulo via OSC (VTERM_PROP_TITLE / scrape) */
+    int    title_len;         /* acumulacao dos fragmentos de titulo do libvterm */
     int    title_changed;     /* main thread consome e emite WINDOW-TITLE */
 
-    /* estado do parser VT (vt.c) */
-    int    vt_state;
-    int    params[VT_MAXPARAMS];
-    int    nparams;
-    int    param_ovf;         /* algum parametro estourou -> descarta a sequencia */
-    char   priv;              /* prefixo privado de CSI: '?','>','!' ou 0 */
-    char   inter;             /* byte intermediario (0x20-0x2f) ou 0 */
-    char   str_kind;          /* OSC/DCS/PM/APC em andamento */
-    COLORREF cur_fg, cur_bg;
-    unsigned short cur_attr;
-    int    sv_x, sv_y;        /* cursor salvo (DECSC) */
-    COLORREF sv_fg, sv_bg;
-    unsigned short sv_attr;
-    unsigned utf8_cp;         /* acumulador de decodificacao UTF-8 */
-    int    utf8_left;         /* bytes de continuacao restantes */
-    unsigned last_cp;         /* ultimo codepoint impresso (para REP/CSI b) */
-    char   osc[VT_OSCCAP];
-    int    osc_len;
-    char  *tabs;              /* cols: 1 onde ha tab stop */
-
-    /* resposta a queries (DSR/DA): montada sob lock, enviada apos liberar */
-    char   reply[VT_REPLYCAP];
+    /* saida do libvterm de volta ao pty (DSR/DA/mouse): montada no callback
+     * sob o lock, enviada depois de liberar */
+    char   reply[512];
     int    reply_len;
 
     HANDLE reader;            /* thread leitora do stream de saida */
@@ -117,7 +76,7 @@ Terminal *term_create(const char *cmdline, int cols, int rows, struct Window *wi
 void      term_destroy(Terminal *t);
 void      term_input(Terminal *t, const char *bytes, int n);
 void      term_resize(Terminal *t, int cols, int rows);
-/* encaminha um evento de mouse ao pty se o programa habilitou rastreio (#9) */
+/* encaminha um evento de mouse ao pty (via libvterm; no-op sem rastreio) */
 void      term_mouse(Terminal *t, int col, int row, int button, int press, int motion);
 
 /* backends (retornam 0 em sucesso) */
@@ -125,12 +84,12 @@ int  term_conpty_start(Terminal *t, const char *cmdline, int cols, int rows);
 extern TerminalBackend term_conpty_backend;
 extern TerminalBackend term_scrape_backend;
 
-/* vt.c */
-int  vt_init(Terminal *t, int cols, int rows);   /* 0=ok, -1=sem memoria (#105) */
+/* vt.c (glue com o libvterm + render) */
+int  vt_init(Terminal *t, int cols, int rows);   /* 0=ok, -1=sem memoria */
+int  vt_use_libvterm(Terminal *t);               /* liga o libvterm (caminho ConPTY) */
 void vt_free(Terminal *t);
 void vt_resize(Terminal *t, int cols, int rows);
 void vt_feed(Terminal *t, const char *bytes, int n);  /* pega o lock internamente */
-/* render: desenha a grade no memdc (chamado pelo compositor, main thread) */
 void vt_render(Terminal *t, HDC memdc, HFONT font, int cellw, int cellh);
 
 /* paleta ANSI 0..15 -> RGB (compartilhada com o scrape) */
