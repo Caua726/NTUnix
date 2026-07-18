@@ -139,22 +139,42 @@ static int pty_start(Terminal *t, const char *cmdline, int cols, int rows)
     if (!env)
         goto fail;
 
-    STARTUPINFOA si;
-    ZeroMemory(&si, sizeof si);
-    si.cb = sizeof si;
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdInput = in_r;
-    si.hStdOutput = out_w;
-    si.hStdError = out_w;
-
     char cmd[1024];
     strncpy(cmd, cmdline ? cmdline : "cmd.exe", sizeof cmd - 1);
     cmd[sizeof cmd - 1] = 0;
 
+    /* audit #111: bInheritHandles=TRUE sozinho herda TODOS os handles herdaveis
+     * -> um novo terminal herdaria as pontas de pipe de OUTROS terminais e o EOF
+     * nunca chegaria neles. Passa uma lista EXPLICITA: so as 2 pontas do filho. */
+    STARTUPINFOEXA six;
+    ZeroMemory(&six, sizeof six);
+    six.StartupInfo.cb = sizeof six;
+    six.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    six.StartupInfo.hStdInput = in_r;
+    six.StartupInfo.hStdOutput = out_w;
+    six.StartupInfo.hStdError = out_w;
+
+    HANDLE inherit_list[2] = { in_r, out_w };
+    SIZE_T attr_sz = 0;
+    LPPROC_THREAD_ATTRIBUTE_LIST attrs = NULL;
+    DWORD cflags = CREATE_NO_WINDOW;
+    InitializeProcThreadAttributeList(NULL, 1, 0, &attr_sz);
+    if (attr_sz && (attrs = (LPPROC_THREAD_ATTRIBUTE_LIST)malloc(attr_sz)) &&
+        InitializeProcThreadAttributeList(attrs, 1, 0, &attr_sz) &&
+        UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                  inherit_list, sizeof inherit_list, NULL, NULL)) {
+        six.lpAttributeList = attrs;
+        cflags |= EXTENDED_STARTUPINFO_PRESENT;
+    } else if (attrs) {
+        free(attrs);
+        attrs = NULL;   /* fallback: sem lista (comportamento antigo) */
+    }
+
     PROCESS_INFORMATION pi;
     ZeroMemory(&pi, sizeof pi);
-    BOOL ok = CreateProcessA(NULL, cmd, NULL, NULL, TRUE, CREATE_NO_WINDOW,
-                             env, ntu_root(), &si, &pi);
+    BOOL ok = CreateProcessA(NULL, cmd, NULL, NULL, TRUE, cflags,
+                             env, ntu_root(), &six.StartupInfo, &pi);
+    if (attrs) { DeleteProcThreadAttributeList(attrs); free(attrs); }
     free(env);
     env = NULL;
     /* o master nao precisa das pontas do filho */
