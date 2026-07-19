@@ -90,12 +90,14 @@ int main(void)
     {
         char win32[MAX_PATH], exe[MAX_PATH], inf[MAX_PATH], cmd[MAX_PATH * 2 + 16];
         GetSystemDirectoryA(win32, sizeof win32);   /* X:\Windows\System32 */
-        /* 1) instala o INF da serial PCI (mapeia 1b36:0002 -> mf.inf -> serial.sys) */
-        lstrcpyA(exe, win32); lstrcatA(exe, "\\drvload.exe");
+        /* 1) instala o INF da serial PCI. O drvload deu exit 3 (fraco pra INF
+         * MultiFunction c/ co-installer mf.inf) -> usa pnputil /add-driver /install,
+         * que poe no driver store E instala nos devices que casam (VEN_1B36). */
+        lstrcpyA(exe, win32); lstrcatA(exe, "\\pnputil.exe");
         lstrcpyA(inf, g_dir); lstrcatA(inf, "\\qemupciserial.inf");
         cmd[0] = '"'; lstrcpyA(cmd + 1, exe);
-        lstrcatA(cmd, "\" \""); lstrcatA(cmd, inf); lstrcatA(cmd, "\"");
-        run_and_log(exe, cmd, "ntdbgcon: drvload qemupciserial.inf");
+        lstrcatA(cmd, "\" /add-driver \""); lstrcatA(cmd, inf); lstrcatA(cmd, "\" /install");
+        run_and_log(exe, cmd, "ntdbgcon: pnputil /add-driver qemupciserial.inf /install");
         /* 2) forca o PnP a re-escanear -> binda o INF no device VEN_1B36 e cria os
          * filhos COM (*PNP0501 -> serial.sys). Sem o rescan o WinPE nao enumera o
          * device recem-instalado (drvload so poe o driver no store). */
