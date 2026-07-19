@@ -11,7 +11,11 @@ The relationship is the same one a Linux distribution has with the Linux
 kernel. The kernel and the driver stack are not ours; the system built on top
 of them is.
 
-![The NTUnix desktop: ntclock in the master column, three shells in the stack](docs/screenshots/desktop.png)
+Windows programs keep working. They are discovered, stripped of their frame,
+and tiled alongside everything else — here Task Manager sits in the master
+column, with the clock and two BusyBox shells in the stack.
+
+![Windows Task Manager tiled by ntwm, next to ntclock and two BusyBox shells](docs/screenshots/windows-app.png)
 
 Version `0.1.0-dev`. It boots in a VM. It is not a system to depend on.
 
@@ -34,11 +38,15 @@ purpose-built LLVM tool that rewrites the calling convention, and lowered to
 COFF. The NT backend underneath is about 4,700 lines.
 
 The terminal runs on a native PTY over musl-nt, with libvterm as the VT engine.
-ConPTY and console-scrape backends remain as fallbacks. Applications reach dispd
-through a shared section object, which is the NT equivalent of `wl_shm`;
-`ntclock` is the only application using it so far.
+ConPTY and console-scrape backends remain as fallbacks.
 
 ![A shell session under NTUnix](docs/screenshots/terminal.png)
+
+Applications reach dispd through a shared section object, which is the NT
+equivalent of `wl_shm`. `ntclock` is the only application using it so far — the
+clock in the screenshots is drawing into a surface the compositor owns.
+
+![ntclock in the master column against three shells](docs/screenshots/desktop.png)
 
 ## Requirements
 
