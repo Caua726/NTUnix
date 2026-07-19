@@ -15,6 +15,13 @@ VM_NAME ?= ntunix-live
 # obrigatorio passar WIN_ISO — so ponha a ISO ali (ou passe WIN_ISO=/caminho.iso).
 WIN_ISO ?= $(CURDIR)/build/deps/windows.iso
 
+# Nome da ISO de saida. Sao DUAS midias diferentes e nao podem colidir:
+#   make live -> NTUnix-live.iso  (so live, sem install.wim, pequena)
+#   make iso  -> NTUnix.iso       (live + install.wim + ntstrap, instalavel)
+# OUT_ISO sobrescreve ambas quando definido na linha de comando.
+LIVE_ISO ?= $(if $(OUT_ISO),$(OUT_ISO),$(CURDIR)/NTUnix-live.iso)
+INST_ISO ?= $(if $(OUT_ISO),$(OUT_ISO),$(CURDIR)/NTUnix.iso)
+
 OUT := out
 BIN := $(OUT)/system/bin
 
@@ -127,7 +134,7 @@ live:
 		echo "  ponha a ISO em build/deps/windows.iso ou passe WIN_ISO=/caminho.iso"; exit 1; }
 	$(MAKE) busybox-nt          # deps + musl-nt + busybox (+ copia busybox.exe)
 	$(MAKE) all                 # dispd/ntwm/initd/... + stage
-	./build/make-live.sh "$(WIN_ISO)" $(OUT_ISO)
+	./build/make-live.sh "$(WIN_ISO)" "$(LIVE_ISO)"
 	@if [ -z "$(NO_BOOT)" ] && command -v $(firstword $(VIRSH)) >/dev/null 2>&1; then \
 		echo ">> reiniciando a VM $(VM_NAME)"; \
 		$(VIRSH) destroy $(VM_NAME) 2>/dev/null || true; \
@@ -143,7 +150,7 @@ live:
 # pra rodar comandos/ler logs sem print/loop. Nunca use isto em build de producao.
 debug-live:
 	$(MAKE) live NTUNIX_DEBUG=1 NO_BOOT=1
-	NTUNIX_DEBUG=1 ./build/vm-setup.sh live "$(OUT_ISO)"
+	NTUNIX_DEBUG=1 ./build/vm-setup.sh live "$(LIVE_ISO)"
 	@command -v $(firstword $(VIRSH)) >/dev/null 2>&1 && $(VIRSH) start $(VM_NAME) || true
 	@echo ">> canal serial de debug pronto:  nc 127.0.0.1 $${NTUNIX_DBG_PORT:-4555}"
 
@@ -158,7 +165,7 @@ iso:
 		echo "  ponha a ISO em build/deps/windows.iso ou passe WIN_ISO=/caminho.iso"; exit 1; }
 	$(MAKE) busybox-nt
 	$(MAKE) all
-	NTUNIX_INSTALLER=1 ./build/make-live.sh "$(WIN_ISO)" $(OUT_ISO)
+	NTUNIX_INSTALLER=1 ./build/make-live.sh "$(WIN_ISO)" "$(INST_ISO)"
 
 # ---- VM de desenvolvimento (Windows INSTALADO + arvore do host montada) ----
 # Fluxo novo, que substitui o ciclo "regera ISO de 830M e reboota":
@@ -172,7 +179,7 @@ iso:
 # pra um ramdisk, entao a imagem ocupa memoria enquanto roda.
 vm-install:
 	$(MAKE) iso
-	./build/vm-setup.sh install $(OUT_ISO)
+	./build/vm-setup.sh install "$(INST_ISO)"
 
 vm: all
 	./build/vm-setup.sh run

@@ -82,17 +82,50 @@ anything imports UCRT, MSVCRT or `api-ms-win-crt`. Running the binaries is the
 VM's job — NTUnix targets the NT kernel, so a real NT kernel is what it is
 tested against.
 
+## Installing
+
+NTUnix installs itself. `ntstrap` is the installer, and it runs from inside the
+live environment, the way `pacstrap` runs from the Arch ISO:
+
+```sh
+make iso                # live media + install.wim + ntstrap
+```
+
+Boot that media — it comes up in NTUnix — and from a terminal:
+
+```sh
+cmd /c ntstrap.cmd      # asks for the edition, confirms, then installs
+```
+
+`ntstrap` partitions the disk with `diskpart` (GPT: 300 MB ESP, 16 MB MSR, NTFS
+for the rest), applies the image with `dism /Apply-Image`, strips the stock
+Windows user space, copies the NTUnix tree in, loads the `SOFTWARE` and `SYSTEM`
+hives **offline** to write the session shell and the rest of the configuration,
+and calls `bcdboot`. All four tools are inbox in WinPE.
+
+Windows Setup never runs. That is the point: there is no language page, no
+product key prompt and no OOBE deciding anything, because none of that is ours
+to answer. A machine that boots straight into `ntsession` because we wrote that
+into the hive before its first boot is a different thing from a Windows
+installation with the shell swapped afterwards.
+
+The one exception is the local account, which cannot reasonably be created
+offline; a minimal answer file covers the `oobeSystem` pass and nothing else.
+
+`cmd /c` is needed because the NTUnix shell is BusyBox ash, which only executes
+PE binaries — a `.cmd` needs the Windows interpreter.
+
 ## The development VM
 
 Put a Windows ISO at `build/deps/windows.iso`, or pass `WIN_ISO=`.
 
 ```sh
-make vm-install         # once: unattended install to build/vm/ntunix.qcow2
-make vm                 # boot from disk, with out/ mounted from the host
+make iso                # installer media
+make vm-install         # boot it in the VM, so you can run ntstrap
+make vm                 # afterwards: boot from disk, out/ mounted from the host
 ```
 
-`vm-install` wipes and repartitions that disk, then installs without prompting.
-After that the loop no longer involves an image at all: QEMU serves `out/` over
+Once installed, the loop no longer involves an image at all: QEMU serves `out/` over
 its built-in SMB server, the guest sees the host tree live, and a rebuild takes
 effect on the next service restart.
 
@@ -105,24 +138,21 @@ SMB rather than virtiofs because Windows already has an SMB client: no driver to
 install, so no signed-driver wall. That is the same reason the debug channel is
 network rather than serial, which `docs/canal-debug-vm.md` records in detail.
 
-An installed Windows also costs less RAM than the live image — WinPE unpacks
-`boot.wim` into a ramdisk, so the image occupies memory for as long as it runs.
-
-The ISO targets remain, for building media rather than developing against it:
+An installed Windows also costs less RAM than running from the live media —
+WinPE unpacks `boot.wim` into a ramdisk, so the image occupies memory for as
+long as it runs.
 
 ```sh
-make iso                # installable ISO; applies full Windows, pacstrap-style
-make live               # live ISO (WinPE), runs entirely from RAM
-make vm-live            # define the VM against the live ISO
+make live               # live-only media, without install.wim (smaller)
+make vm-live            # define the VM against it
 ```
 
-The build extracts the source ISO, removes the stock user space listed in
-`build/strip.list`, injects the NTUnix tree at `\NTUnix`, sets `ntsession` as
-the session shell through `autounattend.xml` and `SetupComplete.cmd`, and
-repacks a hybrid BIOS+UEFI ISO.
+Building the media extracts the source ISO, drops the Windows Setup image from
+`boot.wim`, injects the NTUnix tree at `\NTUnix` with `ntstrap` alongside it,
+points the WinPE shell at `ntsession`, and repacks a hybrid BIOS+UEFI ISO.
 
-`OUT_ISO=` names the output, `NTUNIX_EDITIONS="1 6"` limits which editions are
-processed, `VM_NAME=` and `VIRSH=` select a different VM. At runtime,
+`OUT_ISO=` names the output, `VM_NAME=` and `VIRSH=` select a different VM,
+`NTUNIX_VM_RAM=` and `NTUNIX_VM_CPUS=` size it. At runtime,
 `NTUNIX_ROOT` sets the tree root, `DISPD_BACKEND=gdi|dxgi` picks the present
 backend, and `DISPD_TERM=pty|conpty|scrape|demo` forces a terminal backend.
 
@@ -158,7 +188,7 @@ src/apps/       ntclock (demo client of the app surface API)
 musl-nt/        nt/ (the NT backend) · tools/ (LP64->COFF rewrite) · test/
 third_party/    libvterm (MIT) — the VT engine from vim/neovim
 etc/            units/*.service · passwd · group · hosts · mtab · ntwm.conf
-build/          fetch-deps · make-iso · make-live · autounattend.xml · strip.list
+build/          fetch-deps · make-live · ntstrap.cmd (the installer) · strip.list
 test/           smoke.sh (runtime) · build-check.sh (image base)
 docs/           contracts, audit, research — see docs/README.md
 ```
