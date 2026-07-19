@@ -1,12 +1,12 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 rem ============================================================================
-rem ntstrap — o instalador do NTUnix. Roda DENTRO do ambiente live (WinPE).
+rem ntstrap - o instalador do NTUnix. Roda DENTRO do ambiente live (WinPE).
 rem
 rem   ntstrap [disco] [indice]      ex.: ntstrap 0 4
 rem
 rem Faz o que o pacstrap faz: particiona, aplica o sistema base num diretorio e
-rem torna aquilo bootavel. O Setup da Microsoft NAO participa — por isso nao ha
+rem torna aquilo bootavel. O Setup da Microsoft NAO participa - por isso nao ha
 rem tela de idioma, nem chave de produto, nem OOBE decidindo nada por nos. A
 rem configuracao e' escrita direto nos hives, offline, antes do primeiro boot.
 rem
@@ -18,13 +18,13 @@ set INDEX=%~2
 if "%DISK%"=="" set DISK=0
 set EFI=S:
 set TGT=W:
-rem A arvore do NTUnix vem do proprio ambiente live (esta dentro do boot.wim,
-rem montado em X:); so o install.wim e' grande demais e fica na midia.
+rem A arvore do NTUnix vem do proprio ambiente live: ela esta dentro do
+rem boot.wim, montado em X:. So o install.wim e' grande demais e fica na midia.
 set NTU=%SYSTEMDRIVE%\NTUnix
 set INST=%NTU%\install
 
 echo.
-echo   ntstrap — instalador do NTUnix
+echo   ntstrap - instalador do NTUnix
 echo   ------------------------------
 
 rem --- 1. achar a midia (a letra do CD varia; procuramos o install.wim) ------
@@ -155,7 +155,7 @@ reg unload HKLM\NTUSYS >nul
 
 rem --- 8. conta local + autologon (unica coisa que o OOBE ainda faz) --------
 rem Criar conta offline nao e' viavel; entao plantamos um unattend MINIMO que
-rem so trata o pass oobeSystem. Nada de disco, idioma ou chave — aquilo era o
+rem so trata o pass oobeSystem. Nada de disco, idioma ou chave - aquilo era o
 rem instalador da Microsoft, e ele nao roda mais.
 if exist "%INST%\unattend-oobe.xml" (
     echo   ==^> plantando o unattend de primeiro boot ^(so conta + autologon^)
