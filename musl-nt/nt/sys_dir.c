@@ -47,6 +47,23 @@ static void ls_dbg(const char *label, unsigned long long val)
     }
 }
 
+/* DEBUG: loga "nm[LEN]=<nome>" p/ ver se os nomes das entradas saem certos. */
+static void ls_dbg_name(const char *name, size_t len)
+{
+    char buf[96];
+    int p = 0;
+    buf[p++] = 'n'; buf[p++] = 'm'; buf[p++] = '[';
+    buf[p++] = "0123456789"[(len / 10) % 10];
+    buf[p++] = "0123456789"[len % 10];
+    buf[p++] = ']'; buf[p++] = '=';
+    for (size_t i = 0; i < len && p < 90; i++)
+        buf[p++] = (name[i] >= 0x20) ? name[i] : '?';
+    buf[p++] = '\n';
+    HANDLE h = CreateFileW(L"X:\\NTUnix\\ls-debug.log", FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, 0, OPEN_ALWAYS, 0, 0);
+    if (h != INVALID_HANDLE_VALUE) { DWORD w; WriteFile(h, buf, (DWORD)p, &w, 0); CloseHandle(h); }
+}
+
 nt_sc_t nt_sys_getdents64(nt_sc_t fd, nt_sc_t buf_arg, nt_sc_t count_arg)
 {
     struct nt_fd *slot = nt_fd_get((int)fd);
@@ -100,6 +117,10 @@ nt_sc_t nt_sys_getdents64(nt_sc_t fd, nt_sc_t buf_arg, nt_sc_t count_arg)
                             name, sizeof name, &name_len) < 0) {
             ReleaseSRWLockExclusive(&slot->io_lock);
             return used ? (nt_sc_t)used : -NT_ENAMETOOLONG;
+        }
+        if (slot->dir_cookie < 8) {   /* DEBUG: nomes das primeiras entradas */
+            ls_dbg("nm_rawlen", (unsigned long long)info->FileNameLength);
+            ls_dbg_name(name, name_len);
         }
         record_len = align8(offsetof(struct nt_linux_dirent64, d_name) +
                             name_len + 1);
