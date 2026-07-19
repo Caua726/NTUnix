@@ -61,7 +61,10 @@ fi
 [ -f "$WIM" ] || die "sem sources/install.wim nem install.esd"
 
 # quais edicoes tratar (padrao: todas)
-EDITIONS="${NTUNIX_EDITIONS:-$(wimlib-imagex info "$WIM" | awk '/Index:/{print $NF}')}"
+# ANCORAR o '^': o cabecalho do WIM tem um campo 'Boot Index:' que, sem a
+# ancora, entrava na lista como se fosse a edicao 0 — e indice de WIM comeca
+# em 1. Passava despercebido porque o loop de delete engole o erro.
+EDITIONS="${NTUNIX_EDITIONS:-$(wimlib-imagex info "$WIM" | awk '/^Index:/{print $NF}')}"
 step "edicoes a tratar: $(echo $EDITIONS | tr '\n' ' ')"
 
 # --- 3+4+5. por edicao: injetar NTUnix, stripar, plantar hooks ------------
@@ -77,19 +80,47 @@ NTUNIX_PW="${NTUNIX_PASSWORD:-ntunix}"
 if [ "$NTUNIX_PW" = ntunix ]; then
     step "AVISO seguranca: usando senha padrao 'ntunix' — defina NTUNIX_PASSWORD=<senha> no build"
 fi
-# edicao que o Setup vai aplicar sem perguntar. Padrao: a primeira das EDITIONS
-# (o nome exato vem do WIM; um nome errado faz o Setup parar pedindo a edicao).
-FIRST_ED="$(echo $EDITIONS | awk '{print $1}')"
-NTUNIX_ED="${NTUNIX_EDITION:-$(wimlib-imagex info "$WIM" "$FIRST_ED" \
-    | awk -F': ' '/^Name:/{print $2; exit}')}"
+# Nome EXATO da edicao que o Setup vai aplicar. Um nome errado (ou com o padding
+# que o wimlib imprime) faz o Setup parar pedindo a edicao na mao.
+ed_name() {   # $1 = indice -> nome, sem espaco nas pontas
+    wimlib-imagex info "$WIM" "$1" \
+        | sed -n 's/^Name:[[:space:]]*//p' | head -1 \
+        | sed 's/[[:space:]]*$//'
+}
+# Padrao: preferir "Pro" (que e' a edicao a que a chave abaixo corresponde);
+# so cai na primeira da lista se a imagem nao tiver Pro.
+if [ -z "${NTUNIX_EDITION:-}" ]; then
+    NTUNIX_ED=""
+    for idx in $EDITIONS; do
+        n="$(ed_name "$idx")"
+        case "$n" in *" Pro") NTUNIX_ED="$n"; break ;; esac
+    done
+    [ -n "$NTUNIX_ED" ] || NTUNIX_ED="$(ed_name "$(echo $EDITIONS | awk '{print $1}')")"
+else
+    NTUNIX_ED="$NTUNIX_EDITION"
+fi
+
 # O Setup precisa de ALGUMA chave pra nao parar na tela de licenca: com <Key>
-# vazio ele erra em vez de pular. Usamos a GVLK (KMS client key) do Win11/10 Pro,
-# que a propria Microsoft publica em
+# vazio ele erra em vez de pular. Usamos a GVLK (KMS client key) que a propria
+# Microsoft publica em
 #   learn.microsoft.com/windows-server/get-started/kms-client-activation-keys
 # Ela apenas SELECIONA A EDICAO. Nao ativa nada (sem um host KMS na rede nao
 # ativa mesmo) e nao substitui licenca: a licenca continua sendo a sua, como o
 # resto do projeto assume. Sobrescreva com NTUNIX_KEY=<sua chave>.
-NTUNIX_KEY="${NTUNIX_KEY:-W269N-WFGWX-YVC9B-4J6C9-T83GX}"
+#
+# A CHAVE TEM QUE CASAR COM A EDICAO, senao o Setup para.
+case "$NTUNIX_ED" in
+    *"Pro for Workstations") DEFKEY=NRG8B-VKK3Q-CXVCJ-9G2XF-6Q84J ;;
+    *"Pro Education")        DEFKEY=6TP4R-GNPTD-KYYHQ-7B7DP-J447Y ;;
+    *"Education")            DEFKEY=NW6C2-QMPVW-D7KKK-3GKT6-VCFB2 ;;
+    *"Enterprise")           DEFKEY=NPPR9-FWDCX-D2C8J-H872K-2YT43 ;;
+    *"Pro")                  DEFKEY=W269N-WFGWX-YVC9B-4J6C9-T83GX ;;
+    *)                       DEFKEY="" ;;
+esac
+NTUNIX_KEY="${NTUNIX_KEY:-$DEFKEY}"
+[ -n "$NTUNIX_KEY" ] || die "sem chave GVLK conhecida pra edicao '$NTUNIX_ED' —
+  passe NTUNIX_KEY=<chave> ou NTUNIX_EDITION=<outra edicao>.
+  edicoes nesta imagem: $(for i in $EDITIONS; do printf '%s; ' "$(ed_name "$i")"; done)"
 step "instalacao desatendida: edicao '$NTUNIX_ED' no disco 0 (o disco sera APAGADO)"
 
 UNATTEND="$WORK/unattend.rendered.xml"

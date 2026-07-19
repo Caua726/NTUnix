@@ -15,6 +15,28 @@ echo [%date% %time%] NTUnix SetupComplete iniciando > "%LOG%"
 rem --- ambiente global -----------------------------------------
 setx /M NTUNIX_ROOT "%ROOT%" >> "%LOG%" 2>&1
 
+rem --- DEV: arvore vinda do host, ao vivo (share SMB do QEMU) ---
+rem O marcador etc/ntunix-debug so existe em build feito com NTUNIX_DEBUG=1.
+rem Nesse caso a raiz passa a ser o share do host: recompilar no host e
+rem reiniciar o servico no guest basta, sem regerar imagem.
+rem
+rem Duas travas do Windows precisam cair, porque o smbd do QEMU serve com
+rem 'guest ok=yes' e sem assinatura:
+rem   AllowInsecureGuestAuth   - o Win11 recusa logon guest em SMB2/3 por padrao
+rem   RequireSecuritySignature - o 24H2+ exige assinatura, o que mata o guest
+rem Sao aceitaveis numa VM de dev isolada no SLIRP; nunca em producao.
+if exist "%ROOT%\etc\ntunix-debug" (
+    echo [%date% %time%] modo DEV: raiz no share do host >> "%LOG%"
+    reg add "HKLM\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters" ^
+        /v AllowInsecureGuestAuth /t REG_DWORD /d 1 /f >> "%LOG%" 2>&1
+    reg add "HKLM\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters" ^
+        /v RequireSecuritySignature /t REG_DWORD /d 0 /f >> "%LOG%" 2>&1
+    rem O ntsession.exe continua sendo carregado do disco local pelo Winlogon;
+    rem so a RAIZ aponta pro share. Se o share cair, o desktop nao sobe, mas a
+    rem sessao sobe: basta   setx /M NTUNIX_ROOT C:\NTUnix   pra voltar ao local.
+    setx /M NTUNIX_ROOT "\\10.0.2.4\qemu" >> "%LOG%" 2>&1
+)
+
 rem --- shell da sessao: ntsession no lugar do Explorer ---------
 reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" ^
     /v Shell /t REG_SZ /d "%ROOT%\system\bin\ntsession.exe" /f >> "%LOG%" 2>&1
