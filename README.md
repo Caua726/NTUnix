@@ -52,7 +52,7 @@ clock in the screenshots is drawing into a surface the compositor owns.
 
 Built on Linux, cross-compiled with mingw-w64. musl-nt also needs Clang and LLVM,
 because it builds an LLVM tool of its own. Image work needs `wimlib`, `xorriso`
-and `7z`. Wine runs the test suites.
+and `7z`, and the development VM needs `libvirt`, `qemu` and `samba`.
 
 ```sh
 pacman -S mingw-w64-gcc clang llvm wimlib xorriso p7zip                       # Arch
@@ -70,32 +70,50 @@ on its own before the targets that need it.
 
 ```sh
 make                    # user space -> out/
-make smoke              # 19 runtime checks under Wine
 make check-build        # lint and image dry-run, no ISO needed
 make musl-nt            # libc-nt.a + crt0.o
-make musl-nt-test       # hello, smoke, allocator, network; rejects UCRT/MSVCRT
+make musl-nt-check      # builds the libc test battery; rejects UCRT/MSVCRT
 make busybox-nt         # busybox.exe against musl-nt
-make busybox-nt-test    # coreutils battery under Wine
+make busybox-nt-check   # same check over busybox.exe
 ```
 
-`out/` is a complete NTUnix root and runs under Wine or on Windows without an
-image:
+The `-check` targets are static: they run `objdump` over the output and fail if
+anything imports UCRT, MSVCRT or `api-ms-win-crt`. Running the binaries is the
+VM's job — NTUnix targets the NT kernel, so a real NT kernel is what it is
+tested against.
+
+## The development VM
+
+Put a Windows ISO at `build/deps/windows.iso`, or pass `WIN_ISO=`.
 
 ```sh
-wine out/system/bin/initd.exe &
-wine out/system/bin/ntctl.exe list
+make vm-install         # once: unattended install to build/vm/ntunix.qcow2
+make vm                 # boot from disk, with out/ mounted from the host
 ```
 
-## Building an image
-
-Put a Windows ISO at `build/deps/windows.iso`, or pass `WIN_ISO=`. Both targets
-run the full build first.
+`vm-install` wipes and repartitions that disk, then installs without prompting.
+After that the loop no longer involves an image at all: QEMU serves `out/` over
+its built-in SMB server, the guest sees the host tree live, and a rebuild takes
+effect on the next service restart.
 
 ```sh
-make live               # live ISO (WinPE); restarts the libvirt VM
-make live NO_BOOT=1     # same, leaving the VM alone
+make                              # on the host
+ntctl restart dispd               # in the guest — picks up the new binary
+```
+
+SMB rather than virtiofs because Windows already has an SMB client: no driver to
+install, so no signed-driver wall. That is the same reason the debug channel is
+network rather than serial, which `docs/canal-debug-vm.md` records in detail.
+
+An installed Windows also costs less RAM than the live image — WinPE unpacks
+`boot.wim` into a ramdisk, so the image occupies memory for as long as it runs.
+
+The ISO targets remain, for building media rather than developing against it:
+
+```sh
 make iso                # installable ISO; applies full Windows, pacstrap-style
-./build/test-vm.sh NTUnix.iso    # boot it in a UEFI VM (QEMU/OVMF)
+make live               # live ISO (WinPE), runs entirely from RAM
+make vm-live            # define the VM against the live ISO
 ```
 
 The build extracts the source ISO, removes the stock user space listed in

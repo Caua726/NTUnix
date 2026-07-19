@@ -3,7 +3,8 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")" && pwd)
-MUSL_SRC=${MUSL_SRC:-/tmp/musl-1.2.6}
+# fonte da musl: baixada pelo `make deps` da raiz em build/deps (NAO /tmp).
+MUSL_SRC=${MUSL_SRC:-$(cd "$root/.." && pwd)/build/deps/musl-1.2.6}
 
 case " ${*:-} " in
     *" --version "*) echo "ntposix-gcc (musl-nt LP64/COFF) 0.1"; exit 0 ;;

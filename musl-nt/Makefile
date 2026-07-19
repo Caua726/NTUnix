@@ -8,7 +8,6 @@ MINGW_CC ?= x86_64-w64-mingw32-gcc
 AR       ?= x86_64-w64-mingw32-ar
 RANLIB   ?= x86_64-w64-mingw32-ranlib
 OBJDUMP  ?= x86_64-w64-mingw32-objdump
-WINE     ?= wine
 TIMEOUT  ?= timeout
 BUSYBOX_SRC ?= $(abspath ..)/build/deps/busybox-1.37.0
 LP64_CC  := tools/lp64-coff-cc
@@ -115,20 +114,15 @@ hello: $(BUILD)/test/hello.exe
 memory: $(BUILD)/test/memory.exe
 network: $(BUILD)/test/network.exe $(BUILD)/test/etc/hosts
 smoke: $(BUILD)/test/smoke.exe
-	cd $(BUILD)/test && env WINEDEBUG=-all $(TIMEOUT) --kill-after=2s 20s \
-		$(WINE) smoke.exe
 
+# compila a bateria de testes e valida ESTATICAMENTE que nada importa UCRT.
+# A execucao e' na VM: os .exe ficam em $(BUILD)/test e entram na arvore via share.
 test: $(BUILD)/test/hello.exe $(BUILD)/test/smoke.exe \
       $(BUILD)/test/memory.exe $(BUILD)/test/network.exe \
       $(BUILD)/test/spawn.exe $(BUILD)/test/forktest.exe \
       $(BUILD)/test/signal.exe \
       $(BUILD)/test/etc/hosts check-imports
-	cd $(BUILD)/test && for executable in hello.exe smoke.exe memory.exe \
-		network.exe spawn.exe forktest.exe signal.exe; do \
-		echo "== $$executable =="; \
-		env WINEDEBUG=-all $(TIMEOUT) --kill-after=2s 20s \
-			$(WINE) "$$executable" || exit $$?; \
-	done
+	@echo "binarios de teste em $(BUILD)/test — execute-os na VM"
 
 check-imports: $(BUILD)/test/hello.exe
 	@imports=$$($(OBJDUMP) -p $< 2>/dev/null | sed -n 's/.*DLL Name: //p'); \
@@ -159,8 +153,7 @@ check-busybox-imports: busybox
 	 ! echo "$$imports" | grep -qiE 'ucrt|msvcrt|api-ms-win-crt'
 
 busybox-test: check-busybox-imports
-	cd $(BUILD) && env WINEDEBUG=-all $(TIMEOUT) --kill-after=2s 60s \
-		$(WINE) cmd /d /c busybox-runtime.cmd busybox.exe
+	@echo "busybox.exe validado (sem UCRT/MSVCRT) — execute-o na VM"
 
 clean:
 	rm -rf $(BUILD)

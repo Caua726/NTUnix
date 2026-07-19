@@ -9,7 +9,8 @@ UCRT nem MSVCRT.
 
 - `libc-nt.a` e `crt0.o` compilam a partir da fonte oficial da musl;
 - `ntposix-gcc` compila aplicações LP64 e gera PE/COFF;
-- `hello`, a bateria da libc, o alocador e os testes de rede executam sob Wine;
+- `hello`, a bateria da libc, o alocador e os testes de rede compilam e sao
+  validados estaticamente (sem UCRT/MSVCRT); a execucao e' na VM;
 - um BusyBox com mais de 80 applets de coreutils compila sem alteração no código-fonte;
 - a bateria BusyBox cobre I/O, diretórios, metadata, `statfs`/`df`, relógio,
   regex, hashes, links, identidade, `fsync` e utilitários de texto;
@@ -44,10 +45,10 @@ Dependências no host:
 - Clang, LLVM (`llc`, `llvm-config` e headers de desenvolvimento);
 - toolchain x86-64 do mingw-w64;
 - GNU Make e Bash;
-- Wine para os testes de execução.
+- libvirt, QEMU e Samba para a VM de desenvolvimento (a execução é lá).
 
-A fonte da musl não é vendorizada. Por padrão o build usa
-`/tmp/musl-1.2.6`; use `MUSL_SRC` para outro local.
+A fonte da musl não é vendorizada. O `make deps` da raiz a baixa para
+`build/deps/musl-1.2.6`; use `MUSL_SRC` para outro local.
 
 ```sh
 make -C musl-nt MUSL_SRC=/caminho/musl-1.2.6
@@ -68,7 +69,7 @@ Para compilar uma aplicação:
 musl-nt/ntposix-gcc programa.c -o programa.exe
 ```
 
-O driver usa `MUSL_SRC=/tmp/musl-1.2.6` por padrão e aceita a mesma variável de
+O driver usa `MUSL_SRC=build/deps/musl-1.2.6` por padrão e aceita a mesma variável de
 ambiente usada pelo Makefile.
 
 ## BusyBox
@@ -81,14 +82,15 @@ make busybox-nt \
   MUSL_SRC=/caminho/musl-1.2.6 \
   BUSYBOX_SRC=/caminho/busybox
 
-make busybox-nt-test \
+make busybox-nt-check \
   MUSL_SRC=/caminho/musl-1.2.6 \
   BUSYBOX_SRC=/caminho/busybox
 ```
 
 O primeiro alvo copia o resultado para `out/system/bin/busybox.exe`. O segundo
-executa `test/busybox-runtime.cmd` sob Wine e também rejeita importações de
-UCRT/MSVCRT.
+roda `objdump` sobre ele e falha se houver importação de UCRT/MSVCRT. A bateria
+de runtime (`test/busybox-runtime.cmd`) é executada na VM, contra um kernel NT
+de verdade.
 
 O shell BusyBox executa applets marcados como `nofork` dentro do próprio
 processo. Applets lançados diretamente (`busybox.exe cp ...`) funcionam

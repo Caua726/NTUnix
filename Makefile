@@ -1,5 +1,5 @@
 # NTUnix — build cruzado Linux → Windows (mingw-w64).
-# `make` monta a árvore staged em out/ pronta pra rodar (Wine ou Windows).
+# `make` monta a árvore staged em out/. Para rodar, use a VM: `make vm`.
 
 CC     := x86_64-w64-mingw32-gcc
 CFLAGS := -O2 -Wall -Wextra -static -D_WIN32_WINNT=0x0601
@@ -118,9 +118,6 @@ stage-files: | $(BIN)
 	    rm -f $(OUT)/etc/ntunix-debug; \
 	fi
 
-smoke: all
-	./test/smoke.sh
-
 # ISO LIVE: FAZ TUDO — deps + libc + busybox + tools + ISO — e reinicia a VM.
 # ISO do Windows: build/deps/windows.iso por padrao (ou WIN_ISO=/caminho.iso).
 #   make live                       (usa build/deps/windows.iso, reinicia a VM)
@@ -193,7 +190,9 @@ deps:
 musl-nt: deps
 	$(MAKE) -C musl-nt MUSL_SRC="$(MUSL_SRC)" all
 
-musl-nt-test: deps
+# compila a bateria da libc e valida que nada importa UCRT/MSVCRT (objdump).
+# A EXECUCAO e' na VM — ver 'make vm'.
+musl-nt-check: deps
 	$(MAKE) -C musl-nt MUSL_SRC="$(MUSL_SRC)" test
 
 busybox-nt: deps
@@ -202,13 +201,13 @@ busybox-nt: deps
 	mkdir -p $(BIN)
 	cp musl-nt/build/busybox.exe $(BIN)/busybox.exe
 
-busybox-nt-test: deps
+busybox-nt-check: deps
 	$(MAKE) -C musl-nt MUSL_SRC="$(MUSL_SRC)" \
 		BUSYBOX_SRC="$(BUSYBOX_SRC)" busybox-test
 
 clean:
 	rm -rf $(OUT) build/work
 
-.PHONY: all clean stage-files smoke live iso debug-live check-build deps musl-nt \
+.PHONY: all clean stage-files live iso debug-live check-build deps musl-nt \
 	vm-install vm vm-live \
-	musl-nt-test busybox-nt busybox-nt-test
+	musl-nt-check busybox-nt busybox-nt-check
