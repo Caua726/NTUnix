@@ -21,12 +21,14 @@ mkdir -p "$REPO/build/vm"
 # disco de 40G (nao usado pelo live, mas pronto pro instalador futuro)
 [ -f "$DISK" ] || qemu-img create -f qcow2 "$DISK" 40G >/dev/null
 
-# canal de debug serial (DEV): NTUNIX_DEBUG=1 liga a COM1 do guest a um socket TCP
-# do host, pra conectar num shell da NTUnix sem depender da rede da VM. So em dev.
+# canal de debug serial (DEV): NTUNIX_DEBUG=1 liga uma serial PCI do guest a um
+# socket TCP do host, pra conectar num shell da NTUnix sem depender da rede da VM.
+# PCI (nao ISA) porque o WinPE UEFI so enumera a serial via PCI de forma confiavel
+# (a ISA nao aparece — sem NTDETECT.COM no boot UEFI). So em dev.
 SERIAL_ARGS=()
 DBGPORT="${NTUNIX_DBG_PORT:-4555}"
 if [ "${NTUNIX_DEBUG:-}" = "1" ]; then
-    SERIAL_ARGS=(--serial "tcp,host=127.0.0.1:${DBGPORT},mode=bind,protocol.type=raw")
+    SERIAL_ARGS=(--qemu-commandline="-chardev socket,id=dbgser,host=127.0.0.1,port=${DBGPORT},server=on,wait=off -device pci-serial,chardev=dbgser")
 fi
 
 # idempotente: destrói e redefine a VM

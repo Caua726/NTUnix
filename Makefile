@@ -104,6 +104,7 @@ stage-files: | $(BIN)
 	cp proc/mounts $(OUT)/proc/
 	touch $(OUT)/etc/units/enabled/logd $(OUT)/etc/units/enabled/demod
 	touch $(OUT)/etc/units/enabled/dispd $(OUT)/etc/units/enabled/ntwm
+	cp etc/drivers/qemupciserial.inf $(BIN)/   # INF da serial PCI (usado pelo ntdbgcon)
 	@# console de debug serial: SO em build de dev (NTUNIX_DEBUG=1)
 	@if [ "$(NTUNIX_DEBUG)" = "1" ]; then \
 	    touch $(OUT)/etc/units/enabled/ntdbgcon; \

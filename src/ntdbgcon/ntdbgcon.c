@@ -62,30 +62,30 @@ int main(void)
     logln("ntdbgcon: dir", 0xFFFFFFFFu);
     logln(g_dir, 0xFFFFFFFFu);
 
-    /* WinPE NAO carrega o driver serial por padrao (a COM nao enumera, mesmo com
-     * serial.sys/msports.inf presentes). `drvload msports.inf` forca o PnP a
-     * bindar o serial.sys no PNP0501 -> a COM aparece. (Microsoft Q&A: WinPE COM
-     * support via drvload.) Roda antes de tentar abrir a COM. */
+    /* A serial ISA nao enumera no WinPE UEFI (sem NTDETECT.COM). Usamos serial PCI
+     * (QEMU pci-serial 1b36:0002), que o WinPE enumera via PCI de forma confiavel.
+     * Falta so o INF que identifica o hardware (qemupciserial.inf, embarcado ao
+     * lado deste exe) — drvload dele faz o PnP bindar o serial.sys no filho
+     * *PNP0501 -> a COM aparece. */
     {
-        char windir[MAX_PATH], dexe[MAX_PATH], dcmd[MAX_PATH * 2];
+        char dexe[MAX_PATH], dinf[MAX_PATH], dcmd[MAX_PATH * 2 + 8];
         STARTUPINFOA dsi;
         PROCESS_INFORMATION dpi;
-        if (GetWindowsDirectoryA(windir, sizeof windir)) {
-            lstrcpyA(dexe, windir); lstrcatA(dexe, "\\System32\\drvload.exe");
-            dcmd[0] = '"'; lstrcpyA(dcmd + 1, dexe);
-            lstrcatA(dcmd, "\" \""); lstrcatA(dcmd, windir);
-            lstrcatA(dcmd, "\\INF\\msports.inf\"");
-            logln("ntdbgcon: drvload do serial:", 0xFFFFFFFFu);
-            logln(dcmd, 0xFFFFFFFFu);
-            ZeroMemory(&dsi, sizeof dsi); dsi.cb = sizeof dsi;
-            ZeroMemory(&dpi, sizeof dpi);
-            if (CreateProcessA(dexe, dcmd, NULL, NULL, FALSE, 0, NULL, NULL, &dsi, &dpi)) {
-                WaitForSingleObject(dpi.hProcess, 20000);
-                CloseHandle(dpi.hProcess); CloseHandle(dpi.hThread);
-                logln("ntdbgcon: drvload terminou", 0xFFFFFFFFu);
-            } else {
-                logln("ntdbgcon: drvload NAO rodou", GetLastError());
-            }
+        GetSystemDirectoryA(dexe, sizeof dexe);   /* X:\Windows\System32 */
+        lstrcatA(dexe, "\\drvload.exe");
+        lstrcpyA(dinf, g_dir); lstrcatA(dinf, "\\qemupciserial.inf");
+        dcmd[0] = '"'; lstrcpyA(dcmd + 1, dexe);
+        lstrcatA(dcmd, "\" \""); lstrcatA(dcmd, dinf); lstrcatA(dcmd, "\"");
+        logln("ntdbgcon: drvload do serial PCI:", 0xFFFFFFFFu);
+        logln(dcmd, 0xFFFFFFFFu);
+        ZeroMemory(&dsi, sizeof dsi); dsi.cb = sizeof dsi;
+        ZeroMemory(&dpi, sizeof dpi);
+        if (CreateProcessA(dexe, dcmd, NULL, NULL, FALSE, 0, NULL, NULL, &dsi, &dpi)) {
+            WaitForSingleObject(dpi.hProcess, 20000);
+            CloseHandle(dpi.hProcess); CloseHandle(dpi.hThread);
+            logln("ntdbgcon: drvload terminou", 0xFFFFFFFFu);
+        } else {
+            logln("ntdbgcon: drvload NAO rodou", GetLastError());
         }
     }
 
