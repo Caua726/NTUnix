@@ -40,6 +40,26 @@ static void logln(const char *msg, unsigned long code)
     if (h != INVALID_HANDLE_VALUE) { WriteFile(h, line, (DWORD)n, &w, NULL); CloseHandle(h); }
 }
 
+/* roda um comando, espera, e LOGA o exit code (review: nao mascarar o erro real). */
+static void run_and_log(const char *exe, char *cmd, const char *label)
+{
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    DWORD ec = 0xFFFFFFFEu;
+    ZeroMemory(&si, sizeof si); si.cb = sizeof si;
+    ZeroMemory(&pi, sizeof pi);
+    logln(label, 0xFFFFFFFFu);
+    logln(cmd, 0xFFFFFFFFu);
+    if (CreateProcessA(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, 25000);
+        GetExitCodeProcess(pi.hProcess, &ec);
+        CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+        logln("  -> exit code", ec);
+    } else {
+        logln("  -> NAO rodou (GetLastError)", GetLastError());
+    }
+}
+
 int main(void)
 {
     HANDLE com;
@@ -68,25 +88,20 @@ int main(void)
      * lado deste exe) — drvload dele faz o PnP bindar o serial.sys no filho
      * *PNP0501 -> a COM aparece. */
     {
-        char dexe[MAX_PATH], dinf[MAX_PATH], dcmd[MAX_PATH * 2 + 8];
-        STARTUPINFOA dsi;
-        PROCESS_INFORMATION dpi;
-        GetSystemDirectoryA(dexe, sizeof dexe);   /* X:\Windows\System32 */
-        lstrcatA(dexe, "\\drvload.exe");
-        lstrcpyA(dinf, g_dir); lstrcatA(dinf, "\\qemupciserial.inf");
-        dcmd[0] = '"'; lstrcpyA(dcmd + 1, dexe);
-        lstrcatA(dcmd, "\" \""); lstrcatA(dcmd, dinf); lstrcatA(dcmd, "\"");
-        logln("ntdbgcon: drvload do serial PCI:", 0xFFFFFFFFu);
-        logln(dcmd, 0xFFFFFFFFu);
-        ZeroMemory(&dsi, sizeof dsi); dsi.cb = sizeof dsi;
-        ZeroMemory(&dpi, sizeof dpi);
-        if (CreateProcessA(dexe, dcmd, NULL, NULL, FALSE, 0, NULL, NULL, &dsi, &dpi)) {
-            WaitForSingleObject(dpi.hProcess, 20000);
-            CloseHandle(dpi.hProcess); CloseHandle(dpi.hThread);
-            logln("ntdbgcon: drvload terminou", 0xFFFFFFFFu);
-        } else {
-            logln("ntdbgcon: drvload NAO rodou", GetLastError());
-        }
+        char win32[MAX_PATH], exe[MAX_PATH], inf[MAX_PATH], cmd[MAX_PATH * 2 + 16];
+        GetSystemDirectoryA(win32, sizeof win32);   /* X:\Windows\System32 */
+        /* 1) instala o INF da serial PCI (mapeia 1b36:0002 -> mf.inf -> serial.sys) */
+        lstrcpyA(exe, win32); lstrcatA(exe, "\\drvload.exe");
+        lstrcpyA(inf, g_dir); lstrcatA(inf, "\\qemupciserial.inf");
+        cmd[0] = '"'; lstrcpyA(cmd + 1, exe);
+        lstrcatA(cmd, "\" \""); lstrcatA(cmd, inf); lstrcatA(cmd, "\"");
+        run_and_log(exe, cmd, "ntdbgcon: drvload qemupciserial.inf");
+        /* 2) forca o PnP a re-escanear -> binda o INF no device VEN_1B36 e cria os
+         * filhos COM (*PNP0501 -> serial.sys). Sem o rescan o WinPE nao enumera o
+         * device recem-instalado (drvload so poe o driver no store). */
+        lstrcpyA(exe, win32); lstrcatA(exe, "\\pnputil.exe");
+        cmd[0] = '"'; lstrcpyA(cmd + 1, exe); lstrcatA(cmd, "\" /scan-devices");
+        run_and_log(exe, cmd, "ntdbgcon: pnputil /scan-devices");
     }
 
     /* abre a serial: varre COM1..COM8 (pode enumerar como outro numero sob UEFI),
