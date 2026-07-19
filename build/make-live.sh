@@ -35,10 +35,28 @@ for t in wimlib-imagex xorriso 7z; do
     command -v "$t" >/dev/null || die "falta '$t'"
 done
 
-# --- 1. extrair a ISO, pulando o install.wim (7GB, nao usado no live) ------
-step "extraindo $SRC_ISO (sem install.wim)"
+# --- 1. extrair a ISO ------------------------------------------------------
+# O install.wim so entra quando a midia tambem serve de INSTALADOR: ele e' a
+# fonte que o ntstrap aplica no disco. Sem ele a ISO fica pequena, mas so boota
+# live.  NTUNIX_INSTALLER=1  ativa.
 rm -rf "$IMG"; mkdir -p "$IMG"
-7z x -y -o"$IMG" "$SRC_ISO" -x'!sources/install.wim' -x'!sources/install.esd' >/dev/null
+if [ "${NTUNIX_INSTALLER:-}" = 1 ]; then
+    step "extraindo $SRC_ISO (COM install.wim — midia instalavel)"
+    7z x -y -o"$IMG" "$SRC_ISO" >/dev/null
+    if [ -f "$IMG/sources/install.esd" ] && [ ! -f "$IMG/sources/install.wim" ]; then
+        step "normalizando install.esd -> install.wim"
+        n=$(wimlib-imagex info "$IMG/sources/install.esd" | awk '/^Image Count:/{print $NF}')
+        for i in $(seq 1 "$n"); do
+            wimlib-imagex export "$IMG/sources/install.esd" "$i" \
+                "$IMG/sources/install.wim" --compress=LZX >/dev/null
+        done
+        rm -f "$IMG/sources/install.esd"
+    fi
+    [ -f "$IMG/sources/install.wim" ] || die "sources/install.wim ausente na ISO"
+else
+    step "extraindo $SRC_ISO (sem install.wim — so live)"
+    7z x -y -o"$IMG" "$SRC_ISO" -x'!sources/install.wim' -x'!sources/install.esd' >/dev/null
+fi
 chmod -R u+w "$IMG"
 [ -f "$WIM" ] || die "sources/boot.wim ausente na ISO"
 
@@ -55,6 +73,21 @@ step "boot.wim agora: $(wimlib-imagex info "$WIM" | awk -F': +' '/^Name:/{print 
 # --- 3+4. injetar NTUnix e trocar o shell do WinPE -------------------------
 STAGE="$WORK/live-stage"; rm -rf "$STAGE"; mkdir -p "$STAGE"
 cp -a "$REPO/out/." "$STAGE/"
+
+# ferramentas do instalador, em \NTUnix\install dentro do ambiente live
+step "injetando o ntstrap (instalador)"
+mkdir -p "$STAGE/install"
+NTUNIX_PW="${NTUNIX_PASSWORD:-ntunix}"
+if [ "$NTUNIX_PW" = ntunix ]; then
+    step "AVISO seguranca: senha padrao 'ntunix' — defina NTUNIX_PASSWORD=<senha>"
+fi
+cp "$REPO/build/ntstrap.cmd"     "$STAGE/install/"
+cp "$REPO/build/strip.list"      "$STAGE/install/"
+cp "$REPO/build/xcopy-skip.txt"  "$STAGE/install/"
+sed "s|@NTUNIX_PW@|$NTUNIX_PW|g" "$REPO/build/unattend-oobe.xml" \
+    > "$STAGE/install/unattend-oobe.xml"
+# atalho no PATH da sessao: digitar 'ntstrap' no terminal do NTUnix funciona
+cp "$REPO/build/ntstrap.cmd" "$STAGE/system/bin/" 
 step "injetando \\NTUnix e winpeshl.ini no WinPE"
 wimlib-imagex update "$WIM" 1 --command "add '$STAGE' '\\NTUnix'" >/dev/null
 wimlib-imagex update "$WIM" 1 \
@@ -84,4 +117,10 @@ xorriso -as mkisofs \
     -o "$OUT_ISO" "$IMG"
 
 printf '\033[32mpronto:\033[0m %s (%s)\n' "$OUT_ISO" "$(du -h "$OUT_ISO" | cut -f1)"
-echo "teste:  ./build/test-vm.sh \"$OUT_ISO\"   (boota direto no ntsession, sem instalar)"
+if [ "${NTUNIX_INSTALLER:-}" = 1 ]; then
+    echo "midia INSTALAVEL: boota no NTUnix; la dentro, num terminal:"
+    echo "    cmd /c ntstrap.cmd        (particiona, aplica a imagem, torna bootavel)"
+else
+    echo "midia so LIVE (sem install.wim). Para instalavel: NTUNIX_INSTALLER=1"
+fi
+echo "teste:  ./build/test-vm.sh \"$OUT_ISO\""

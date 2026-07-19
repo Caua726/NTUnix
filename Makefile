@@ -147,14 +147,18 @@ debug-live:
 	@command -v $(firstword $(VIRSH)) >/dev/null 2>&1 && $(VIRSH) start $(VM_NAME) || true
 	@echo ">> canal serial de debug pronto:  nc 127.0.0.1 $${NTUNIX_DBG_PORT:-4555}"
 
-# ISO instalavel (aplica o Windows completo estilo pacstrap). FAZ TUDO tambem.
+# ISO INSTALAVEL: a mesma midia live, mais o install.wim, mais o ntstrap.
+# Boota no NTUnix; de la' voce roda `ntstrap` e ele instala no disco — particiona,
+# aplica a imagem com DISM, configura os hives offline e chama o bcdboot. O Setup
+# da Microsoft nao participa: e' por isso que nao ha tela de idioma, chave nem OOBE
+# decidindo nada. Mesma relacao que a ISO do Arch tem com o pacstrap.
 #   make iso [WIN_ISO=/caminho/Win11.iso] [OUT_ISO=NTUnix.iso]
 iso:
 	@test -f "$(WIN_ISO)" || { echo "ISO do Windows nao encontrada: $(WIN_ISO)"; \
 		echo "  ponha a ISO em build/deps/windows.iso ou passe WIN_ISO=/caminho.iso"; exit 1; }
 	$(MAKE) busybox-nt
 	$(MAKE) all
-	./build/make-iso.sh "$(WIN_ISO)" $(OUT_ISO)
+	NTUNIX_INSTALLER=1 ./build/make-live.sh "$(WIN_ISO)" $(OUT_ISO)
 
 # ---- VM de desenvolvimento (Windows INSTALADO + arvore do host montada) ----
 # Fluxo novo, que substitui o ciclo "regera ISO de 830M e reboota":

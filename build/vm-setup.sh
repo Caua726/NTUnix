@@ -2,7 +2,7 @@
 # ============================================================================
 # vm-setup.sh — define a VM 'ntunix' no libvirt (qemu:///session, sem sudo).
 #
-#   ./build/vm-setup.sh install [iso]   instala o Windows no disco (APAGA o disco)
+#   ./build/vm-setup.sh install [iso]   boota a midia instalavel (rode `ntstrap` la dentro)
 #   ./build/vm-setup.sh run             boota do disco, com a arvore do host montada
 #   ./build/vm-setup.sh live [iso]      boota a ISO live (WinPE na RAM) — modo antigo
 #
@@ -24,7 +24,9 @@ CONN="qemu:///session"
 NAME="${VM_NAME:-ntunix}"
 DISK="$REPO/build/vm/ntunix.qcow2"
 DISK_SIZE="${NTUNIX_DISK_SIZE:-40G}"
+# O instalador do Win11 quer folga; o sistema instalado roda bem com menos.
 RAM="${NTUNIX_VM_RAM:-2048}"
+RAM_INSTALL="${NTUNIX_VM_RAM_INSTALL:-4096}"
 VCPUS="${NTUNIX_VM_CPUS:-2}"
 SHARE="${NTUNIX_SHARE:-$REPO/out}"
 DBGPORT="${NTUNIX_DBG_PORT:-2323}"
@@ -60,7 +62,15 @@ mkdir -p "$REPO/build/vm"
 # interface inteira vem por qemu:commandline (por isso --network none).
 #   smb=<dir>          diretorio servido        -> \\10.0.2.4\qemu
 #   guest 10.0.2.15, gateway/host 10.0.2.2, smb 10.0.2.4 (tudo dentro do SLIRP)
-QEMU_NET="-netdev user,id=ntu0,smb=$SHARE,smbserver=10.0.2.4 -device e1000e,netdev=ntu0"
+# A NIC ganha uma pcie-root-port PROPRIA num slot alto: sem 'bus/addr' ela cai
+# no slot 1 do pcie.0, que o libvirt ja reservou pro qxl-vga, e a VM nem sobe
+# ("slot 1 function 0 not available for qxl-vga, in use by e1000e").
+QEMU_NET="-netdev user,id=ntu0,smb=$SHARE,smbserver=10.0.2.4"
+QEMU_NET="$QEMU_NET -device pcie-root-port,id=ntuport,bus=pcie.0,addr=0x10"
+QEMU_NET="$QEMU_NET -device e1000e,netdev=ntu0,bus=ntuport"
+
+# o instalador precisa de folga; depois de instalado, o modo run usa menos
+if [ "$MODE" = install ]; then RAM="$RAM_INSTALL"; fi
 
 # idempotente: destroi e redefine
 virsh -c "$CONN" destroy  "$NAME" 2>/dev/null || true
@@ -83,16 +93,25 @@ case "$MODE" in
 install)
     ISO="${ISO:-$REPO/NTUnix.iso}"
     [ -f "$ISO" ] || die "ISO instalavel nao encontrada: $ISO — rode 'make iso' antes"
-    step "ATENCAO: o disco $DISK sera APAGADO e reparticionado pelo autounattend"
-    step "instalando de $ISO (desatendido; nao interaja com o Setup)"
+    step "bootando a midia instalavel $ISO"
     virt-install "${common_args[@]}" \
         --disk path="$DISK",bus=virtio,boot.order=2 \
         --disk path="$ISO",device=cdrom,bus=sata,boot.order=1
-    echo
-    echo "O Setup roda sozinho e reinicia algumas vezes. Acompanhe:"
-    echo "    virt-viewer --connect $CONN $NAME"
-    echo "Quando cair no desktop do NTUnix, troque pro modo de disco:"
-    echo "    ./build/vm-setup.sh run      (nao boota mais da ISO)"
+    cat <<'EOM'
+
+A midia boota direto no NTUnix. Num terminal do desktop, rode:
+
+    cmd /c ntstrap.cmd 0 4     (disco 0, indice da edicao)
+    cmd /c ntstrap.cmd         (pergunta a edicao e pede confirmacao)
+
+O `cmd /c` e' necessario: o shell do NTUnix e' o busybox ash, que so executa
+PE — um .cmd precisa do interpretador do Windows.
+
+O ntstrap particiona, aplica a imagem, escreve a configuracao nos hives e
+instala o bootloader. Terminado, desligue e passe pro modo de disco:
+
+    ./build/vm-setup.sh run
+EOM
     ;;
 run)
     [ "$(qemu-img info --output=json "$DISK" | grep -o '"actual-size": [0-9]*' | grep -o '[0-9]*')" -gt 104857600 ] \
