@@ -8,6 +8,79 @@
 -->
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
 
+  <!--
+    windowsPE: instalacao desatendida de verdade — particiona o disco 0 e
+    aplica a imagem sem perguntar nada. ATENCAO: WillWipeDisk=true APAGA o
+    disco 0 inteiro. Isto e' para a VM de desenvolvimento; nao boote esta
+    midia numa maquina com dados.
+
+    A chave abaixo e' a chave GENERICA DE INSTALACAO publicada pela Microsoft
+    (a mesma que o proprio Setup usa quando voce escolhe "nao tenho chave").
+    Ela seleciona a edicao e NAO ativa nada — a licenca continua sendo a sua.
+  -->
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-Setup"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral" versionScope="nonSxS"
+               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <DiskConfiguration>
+        <WillShowUI>OnError</WillShowUI>
+        <Disk wcm:action="add">
+          <DiskID>0</DiskID>
+          <WillWipeDisk>true</WillWipeDisk>
+          <CreatePartitions>
+            <!-- 1: EFI System Partition. A MS exige no minimo 200MB (setor 512e)
+                 e 300MB (4K nativo); 300 satisfaz os dois. FAT32 obrigatorio. -->
+            <CreatePartition wcm:action="add">
+              <Order>1</Order><Type>EFI</Type><Size>300</Size>
+            </CreatePartition>
+            <!-- 2: Microsoft Reserved. A doc da MS fixa em 16MB (o valor de 128MB
+                 que circula por ai e' da epoca do Win8). Nao leva filesystem. -->
+            <CreatePartition wcm:action="add">
+              <Order>2</Order><Type>MSR</Type><Size>16</Size>
+            </CreatePartition>
+            <!-- 3: Windows, ocupa o resto -->
+            <CreatePartition wcm:action="add">
+              <Order>3</Order><Type>Primary</Type><Extend>true</Extend>
+            </CreatePartition>
+          </CreatePartitions>
+          <ModifyPartitions>
+            <ModifyPartition wcm:action="add">
+              <Order>1</Order><PartitionID>1</PartitionID>
+              <Format>FAT32</Format><Label>System</Label>
+            </ModifyPartition>
+            <ModifyPartition wcm:action="add">
+              <Order>2</Order><PartitionID>2</PartitionID>
+            </ModifyPartition>
+            <ModifyPartition wcm:action="add">
+              <Order>3</Order><PartitionID>3</PartitionID>
+              <Format>NTFS</Format><Label>NTUnix</Label><Letter>C</Letter>
+            </ModifyPartition>
+          </ModifyPartitions>
+        </Disk>
+      </DiskConfiguration>
+      <ImageInstall>
+        <OSImage>
+          <InstallFrom>
+            <MetaData wcm:action="add">
+              <Key>/IMAGE/NAME</Key>
+              <Value>@NTUNIX_EDITION@</Value>
+            </MetaData>
+          </InstallFrom>
+          <InstallTo><DiskID>0</DiskID><PartitionID>3</PartitionID></InstallTo>
+          <WillShowUI>OnError</WillShowUI>
+        </OSImage>
+      </ImageInstall>
+      <UserData>
+        <AcceptEula>true</AcceptEula>
+        <FullName>ntunix</FullName>
+        <Organization>NTUnix</Organization>
+        <ProductKey><Key>@NTUNIX_KEY@</Key><WillShowUI>OnError</WillShowUI></ProductKey>
+      </UserData>
+    </component>
+  </settings>
+
   <settings pass="oobeSystem">
     <component name="Microsoft-Windows-Shell-Setup"
                processorArchitecture="amd64"

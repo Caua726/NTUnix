@@ -146,7 +146,7 @@ live:
 # pra rodar comandos/ler logs sem print/loop. Nunca use isto em build de producao.
 debug-live:
 	$(MAKE) live NTUNIX_DEBUG=1 NO_BOOT=1
-	NTUNIX_DEBUG=1 ./build/vm-setup.sh "$(OUT_ISO)"
+	NTUNIX_DEBUG=1 ./build/vm-setup.sh live "$(OUT_ISO)"
 	@command -v $(firstword $(VIRSH)) >/dev/null 2>&1 && $(VIRSH) start $(VM_NAME) || true
 	@echo ">> canal serial de debug pronto:  nc 127.0.0.1 $${NTUNIX_DBG_PORT:-4555}"
 
@@ -158,6 +158,27 @@ iso:
 	$(MAKE) busybox-nt
 	$(MAKE) all
 	./build/make-iso.sh "$(WIN_ISO)" $(OUT_ISO)
+
+# ---- VM de desenvolvimento (Windows INSTALADO + arvore do host montada) ----
+# Fluxo novo, que substitui o ciclo "regera ISO de 830M e reboota":
+#
+#   make vm-install     UMA VEZ: instala o Windows no disco (APAGA build/vm/*.qcow2)
+#   make vm             boota do disco, com out/ do host visivel via SMB
+#   make                 <- daqui pra frente: recompila no host...
+#   (no guest) ntctl restart dispd   ... e o guest ja ve o binario novo
+#
+# Instalado gasta menos RAM que a ISO live: o WinPE extrai o boot.wim inteiro
+# pra um ramdisk, entao a imagem ocupa memoria enquanto roda.
+vm-install:
+	$(MAKE) iso
+	./build/vm-setup.sh install $(OUT_ISO)
+
+vm: all
+	./build/vm-setup.sh run
+
+# modo antigo: ISO live (WinPE na RAM). Mantido pra testar a midia em si.
+vm-live: all
+	./build/vm-setup.sh live
 
 # valida a base de build sem precisar de uma ISO (lint + dry-run)
 check-build: all
@@ -189,4 +210,5 @@ clean:
 	rm -rf $(OUT) build/work
 
 .PHONY: all clean stage-files smoke live iso debug-live check-build deps musl-nt \
+	vm-install vm vm-live \
 	musl-nt-test busybox-nt busybox-nt-test

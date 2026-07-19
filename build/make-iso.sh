@@ -77,8 +77,26 @@ NTUNIX_PW="${NTUNIX_PASSWORD:-ntunix}"
 if [ "$NTUNIX_PW" = ntunix ]; then
     step "AVISO seguranca: usando senha padrao 'ntunix' — defina NTUNIX_PASSWORD=<senha> no build"
 fi
+# edicao que o Setup vai aplicar sem perguntar. Padrao: a primeira das EDITIONS
+# (o nome exato vem do WIM; um nome errado faz o Setup parar pedindo a edicao).
+FIRST_ED="$(echo $EDITIONS | awk '{print $1}')"
+NTUNIX_ED="${NTUNIX_EDITION:-$(wimlib-imagex info "$WIM" "$FIRST_ED" \
+    | awk -F': ' '/^Name:/{print $2; exit}')}"
+# O Setup precisa de ALGUMA chave pra nao parar na tela de licenca: com <Key>
+# vazio ele erra em vez de pular. Usamos a GVLK (KMS client key) do Win11/10 Pro,
+# que a propria Microsoft publica em
+#   learn.microsoft.com/windows-server/get-started/kms-client-activation-keys
+# Ela apenas SELECIONA A EDICAO. Nao ativa nada (sem um host KMS na rede nao
+# ativa mesmo) e nao substitui licenca: a licenca continua sendo a sua, como o
+# resto do projeto assume. Sobrescreva com NTUNIX_KEY=<sua chave>.
+NTUNIX_KEY="${NTUNIX_KEY:-W269N-WFGWX-YVC9B-4J6C9-T83GX}"
+step "instalacao desatendida: edicao '$NTUNIX_ED' no disco 0 (o disco sera APAGADO)"
+
 UNATTEND="$WORK/unattend.rendered.xml"
-sed "s|@NTUNIX_PW@|$NTUNIX_PW|g" "$REPO/build/autounattend.xml" > "$UNATTEND"
+sed -e "s|@NTUNIX_PW@|$NTUNIX_PW|g" \
+    -e "s|@NTUNIX_EDITION@|$NTUNIX_ED|g" \
+    -e "s|@NTUNIX_KEY@|$NTUNIX_KEY|g" \
+    "$REPO/build/autounattend.xml" > "$UNATTEND"
 cp "$UNATTEND" "$STAGE/Windows/Panther/Unattend/unattend.xml"
 
 # lista de deletes a partir do strip.list
