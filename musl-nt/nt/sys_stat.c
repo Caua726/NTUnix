@@ -17,6 +17,23 @@ static nt_sc_t open_for_metadata(int dirfd, const char *path, int flags,
     return 0;
 }
 
+/* DEBUG TEMPORARIO (bug do ls): loga "stx:<path>=<hex>" em X:\NTUnix\ls-debug.log */
+static void stx_dbg(const char *path, long long r)
+{
+    char buf[160];
+    int p = 0;
+    buf[p++] = 's'; buf[p++] = 't'; buf[p++] = 'x'; buf[p++] = ':';
+    for (int i = 0; path && path[i] && p < 130; i++)
+        buf[p++] = (path[i] >= 0x20) ? path[i] : '?';
+    buf[p++] = '='; buf[p++] = '0'; buf[p++] = 'x';
+    for (int i = 60; i >= 0; i -= 4)
+        buf[p++] = "0123456789abcdef"[((unsigned long long)r >> i) & 0xf];
+    buf[p++] = '\n';
+    HANDLE h = CreateFileW(L"X:\\NTUnix\\ls-debug.log", FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, 0, OPEN_ALWAYS, 0, 0);
+    if (h != INVALID_HANDLE_VALUE) { DWORD w; WriteFile(h, buf, (DWORD)p, &w, 0); CloseHandle(h); }
+}
+
 nt_sc_t nt_sys_statx(nt_sc_t dirfd, nt_sc_t path_arg, nt_sc_t flags, nt_sc_t mask,
                   nt_sc_t out_arg)
 {
@@ -34,11 +51,12 @@ nt_sc_t nt_sys_statx(nt_sc_t dirfd, nt_sc_t path_arg, nt_sc_t flags, nt_sc_t mas
         if (h == INVALID_HANDLE_VALUE) return -NT_EBADF;
     } else {
         r = open_for_metadata((int)dirfd, path, (int)flags, &h);
-        if (r < 0) return r;
+        if (r < 0) { stx_dbg(path, r); return r; }   /* DEBUG */
         close_handle = 1;
     }
     r = nt_stat_from_handle(h, out);
     if (close_handle) CloseHandle(h);
+    stx_dbg(path, r);   /* DEBUG */
     return r;
 }
 
