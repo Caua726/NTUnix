@@ -115,9 +115,10 @@ int main(void)
             com = CreateFileA(dev, GENERIC_READ | GENERIC_WRITE,
                               0, NULL, OPEN_EXISTING, 0, NULL);
             if (com != INVALID_HANDLE_VALUE) { logln("ntdbgcon: serial aberta em COM", (unsigned)cn); break; }
+            if (tries == 0) logln(dev, GetLastError());  /* review: erro de CADA COM (2=nao existe, 5=em uso) */
         }
         if (com == INVALID_HANDLE_VALUE) {
-            logln("ntdbgcon: nenhuma COM1-8 (retry)", GetLastError());
+            if (tries == 0) logln("ntdbgcon: nenhuma COM1-8; retrying 30x...", 0xFFFFFFFFu);
             Sleep(1000);
         }
     }
