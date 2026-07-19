@@ -27,43 +27,6 @@ static size_t align8(size_t value)
     return (value + 7U) & ~(size_t)7U;
 }
 
-/* DEBUG TEMPORARIO (bug do `ls`): loga "label=0xHEX" em X:\NTUnix\ls-debug.log.
- * Remover depois de diagnosticar. */
-static void ls_dbg(const char *label, unsigned long long val)
-{
-    char buf[80];
-    int p = 0;
-    while (*label && p < 40) buf[p++] = *label++;
-    buf[p++] = '='; buf[p++] = '0'; buf[p++] = 'x';
-    for (int i = 60; i >= 0; i -= 4)
-        buf[p++] = "0123456789abcdef"[(val >> i) & 0xf];
-    buf[p++] = '\n';
-    HANDLE h = CreateFileW(L"X:\\NTUnix\\ls-debug.log", FILE_APPEND_DATA,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE, 0, OPEN_ALWAYS, 0, 0);
-    if (h != INVALID_HANDLE_VALUE) {
-        DWORD w;
-        WriteFile(h, buf, (DWORD)p, &w, 0);
-        CloseHandle(h);
-    }
-}
-
-/* DEBUG: loga "nm[LEN]=<nome>" p/ ver se os nomes das entradas saem certos. */
-static void ls_dbg_name(const char *name, size_t len)
-{
-    char buf[96];
-    int p = 0;
-    buf[p++] = 'n'; buf[p++] = 'm'; buf[p++] = '[';
-    buf[p++] = "0123456789"[(len / 10) % 10];
-    buf[p++] = "0123456789"[len % 10];
-    buf[p++] = ']'; buf[p++] = '=';
-    for (size_t i = 0; i < len && p < 90; i++)
-        buf[p++] = (name[i] >= 0x20) ? name[i] : '?';
-    buf[p++] = '\n';
-    HANDLE h = CreateFileW(L"X:\\NTUnix\\ls-debug.log", FILE_APPEND_DATA,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE, 0, OPEN_ALWAYS, 0, 0);
-    if (h != INVALID_HANDLE_VALUE) { DWORD w; WriteFile(h, buf, (DWORD)p, &w, 0); CloseHandle(h); }
-}
-
 nt_sc_t nt_sys_getdents64(nt_sc_t fd, nt_sc_t buf_arg, nt_sc_t count_arg)
 {
     struct nt_fd *slot = nt_fd_get((int)fd);
@@ -71,10 +34,7 @@ nt_sc_t nt_sys_getdents64(nt_sc_t fd, nt_sc_t buf_arg, nt_sc_t count_arg)
     size_t cap, used = 0;
     unsigned char query_buffer[2048];
     IO_STATUS_BLOCK iosb;
-    if (!slot) { ls_dbg("gd_nofd", (unsigned long long)fd); return -NT_EBADF; }
-    ls_dbg("gd_fd", (unsigned long long)fd);
-    ls_dbg("gd_kind", (unsigned long long)slot->kind);
-    ls_dbg("gd_count", (unsigned long long)count_arg);
+    if (!slot) return -NT_EBADF;
     if (slot->kind != NT_FD_DIR) return -NT_ENOTDIR;
     if (!out && count_arg) return -NT_EFAULT;
     if (count_arg <= 0) return -NT_EINVAL;
@@ -84,7 +44,6 @@ nt_sc_t nt_sys_getdents64(nt_sc_t fd, nt_sc_t buf_arg, nt_sc_t count_arg)
     AcquireSRWLockExclusive(&slot->io_lock);
     if (slot->dir_eof) {
         ReleaseSRWLockExclusive(&slot->io_lock);
-        ls_dbg("gd_eof_early", 0);
         return 0;
     }
     for (;;) {
@@ -99,8 +58,6 @@ nt_sc_t nt_sys_getdents64(nt_sc_t fd, nt_sc_t buf_arg, nt_sc_t count_arg)
                                  query_buffer, sizeof query_buffer,
                                  FileIdBothDirectoryInformation, TRUE, 0,
                                  slot->dir_cookie == 0);
-        if (slot->dir_cookie < 3)
-            ls_dbg("gd_status", (unsigned long long)(unsigned long)status);
         if (status == NT_STATUS_NO_MORE_FILES) {
             slot->dir_eof = 1;
             break;
@@ -108,8 +65,6 @@ nt_sc_t nt_sys_getdents64(nt_sc_t fd, nt_sc_t buf_arg, nt_sc_t count_arg)
         if (status < 0) {
             nt_sc_t r = nt_error_from_status(status);
             ReleaseSRWLockExclusive(&slot->io_lock);
-            ls_dbg("gd_err_status", (unsigned long long)(unsigned long)status);
-            ls_dbg("gd_err_errno", (unsigned long long)(unsigned long long)(-r));
             return used ? (nt_sc_t)used : r;
         }
         info = (void *)query_buffer;
@@ -117,10 +72,6 @@ nt_sc_t nt_sys_getdents64(nt_sc_t fd, nt_sc_t buf_arg, nt_sc_t count_arg)
                             name, sizeof name, &name_len) < 0) {
             ReleaseSRWLockExclusive(&slot->io_lock);
             return used ? (nt_sc_t)used : -NT_ENAMETOOLONG;
-        }
-        if (slot->dir_cookie < 8) {   /* DEBUG: nomes das primeiras entradas */
-            ls_dbg("nm_rawlen", (unsigned long long)info->FileNameLength);
-            ls_dbg_name(name, name_len);
         }
         record_len = align8(offsetof(struct nt_linux_dirent64, d_name) +
                             name_len + 1);
@@ -140,17 +91,11 @@ nt_sc_t nt_sys_getdents64(nt_sc_t fd, nt_sc_t buf_arg, nt_sc_t count_arg)
         dent->d_reclen = (uint16_t)record_len;
         dent->d_type = nt_dtype_from_attributes(info->FileAttributes, 0);
         nt_memcpy(dent->d_name, name, name_len + 1);
-        if (slot->dir_cookie <= 12) {   /* DEBUG: offset, reclen e o d_name JA ESCRITO (o que a musl le) */
-            ls_dbg("at_off", (unsigned long long)used);
-            ls_dbg("reclen", (unsigned long long)record_len);
-            ls_dbg_name(dent->d_name, name_len);
-        }
         used += record_len;
         if (cap - used < offsetof(struct nt_linux_dirent64, d_name) + 2)
             break;
     }
     ReleaseSRWLockExclusive(&slot->io_lock);
-    ls_dbg("gd_used", (unsigned long long)used);
     return (nt_sc_t)used;
 }
 
