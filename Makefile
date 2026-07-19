@@ -27,7 +27,8 @@ HDRS   := src/common/ntu.h src/initd/initd.h
 DISPD_SRC := src/dispd/dispd.c src/dispd/compositor.c src/dispd/present_gdi.c \
              src/dispd/vt.c src/dispd/term.c src/dispd/term_scrape.c \
              src/dispd/term_pty.c src/dispd/foreign.c \
-             src/dispd/input.c src/dispd/wmproto.c src/dispd/appsrv.c
+             src/dispd/input.c src/dispd/wmproto.c src/dispd/appsrv.c \
+             src/dispd/dbgterm.c
 DISPD_HDR := src/dispd/dispd.h src/dispd/present.h src/dispd/term.h \
              src/common/ntu.h src/common/ntuwm.h
 NTWM_SRC  := src/ntwm/ntwm.c src/ntwm/proto.c src/ntwm/layout.c
@@ -83,7 +84,7 @@ $(OUT)/obj/vterm_%.o: $(LIBVTERM_DIR)/src/%.c | $(OUT)/obj
 
 # compositor: GUI nativo. term_conpty/present_dxgi ja compilados a 0x0A00.
 $(BIN)/dispd.exe: $(DISPD_SRC) $(OUT)/obj/term_conpty.o $(OUT)/obj/present_dxgi.o $(LIBVTERM_OBJ) $(COMMON) $(DISPD_HDR) | $(BIN)
-	$(CC) $(CFLAGS) $(LIBVTERM_INC) -mwindows -o $@ $(DISPD_SRC) $(OUT)/obj/term_conpty.o $(OUT)/obj/present_dxgi.o $(LIBVTERM_OBJ) $(COMMON) -lgdi32 -luser32 -ldxguid
+	$(CC) $(CFLAGS) $(LIBVTERM_INC) -mwindows -o $@ $(DISPD_SRC) $(OUT)/obj/term_conpty.o $(OUT)/obj/present_dxgi.o $(LIBVTERM_OBJ) $(COMMON) -lgdi32 -luser32 -ldxguid -lws2_32
 
 # window manager: so pipe + logica, sem libs extras.
 $(BIN)/ntwm.exe: $(NTWM_SRC) $(COMMON) src/common/ntu.h src/common/ntuwm.h src/ntwm/ntwm.h | $(BIN)
@@ -105,12 +106,12 @@ stage-files: | $(BIN)
 	cp proc/mounts $(OUT)/proc/
 	touch $(OUT)/etc/units/enabled/logd $(OUT)/etc/units/enabled/demod
 	touch $(OUT)/etc/units/enabled/dispd $(OUT)/etc/units/enabled/ntwm
-	@# console de debug (rede/reverse-shell): SO em build de dev (NTUNIX_DEBUG=1)
+	@# o canal de debug agora e' o dbgterm DENTRO do dispd (terminal compartilhado,
+	@# gated por NTUNIX_DEBUG no proprio dispd) -> o ntdbgcon separado nao e' mais
+	@# habilitado (conflitaria na mesma porta 2323).
+	rm -f $(OUT)/etc/units/enabled/ntdbgcon
 	@if [ "$(NTUNIX_DEBUG)" = "1" ]; then \
-	    touch $(OUT)/etc/units/enabled/ntdbgcon; \
-	    echo "  [dev] ntdbgcon (console serial de debug) HABILITADO"; \
-	else \
-	    rm -f $(OUT)/etc/units/enabled/ntdbgcon; \
+	    echo "  [dev] terminal de debug COMPARTILHADO (dbgterm no dispd) ativo"; \
 	fi
 
 smoke: all

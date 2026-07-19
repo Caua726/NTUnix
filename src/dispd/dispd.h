@@ -157,6 +157,9 @@ void     dispd_close_window(Window *w);        /* fecha janela + conexao do app 
 void     dispd_log(const char *fmt, ...);
 void     dispd_toast(const char *fmt, ...);    /* #2: feedback visual transitorio */
 
+/* dbgterm.c (DEV): terminal de debug compartilhado (visivel) + ponte de rede */
+void     dbgterm_start(void);
+
 /* abas do terminal (dispd.c) — internas ao dispd; o WM nao sabe delas */
 int      win_tab_add(Window *w, const char *cmdline);  /* nova aba, vira ativa */
 void     win_tab_close(Window *w, int idx);            /* fecha; ultima -> fecha janela */

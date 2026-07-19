@@ -131,6 +131,10 @@ COLORREF vt_ansi_color(int idx);
 /* log (definido em dispd.c) — disponivel para os backends de terminal */
 void dispd_log(const char *fmt, ...);
 
+/* dbgterm.c (DEV): tap da saida do terminal de debug compartilhado -> rede.
+ * No-op se nao ha terminal de debug ou nao esta conectado. */
+void dbgterm_tap(Terminal *t, const char *bytes, int n);
+
 /* #103: 1 se a janela dona do terminal esta visivel (backends nao veem Window) */
 int  term_win_visible(Terminal *t);
 

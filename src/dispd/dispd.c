@@ -486,7 +486,15 @@ int main(void)
         wmproto_start();
         appsrv_start();
         foreign_init();         /* WM das janelas nativas do Windows (WK_FOREIGN) */
-        spawn_terminal(NULL);   /* algo na tela ja no boot */
+        {
+            /* em DEV (NTUNIX_DEBUG=1): abre SO o terminal de debug compartilhado
+             * (dbgterm cria o terminal + a ponte de rede). Senao: terminal normal. */
+            char dv[8];
+            if (GetEnvironmentVariableA("NTUNIX_DEBUG", dv, sizeof dv) > 0)
+                dbgterm_start();
+            else
+                spawn_terminal(NULL);   /* algo na tela ja no boot */
+        }
     }
 
     while (g_srv.running) {

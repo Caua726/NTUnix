@@ -285,6 +285,8 @@ void vt_feed(Terminal *t, const char *bytes, int n)
     char rbuf[sizeof t->reply];
     int rlen;
 
+    dbgterm_tap(t, bytes, n);   /* DEV: espelha a saida do terminal de debug pra rede */
+
     EnterCriticalSection(&t->lock);
     if (t->vt)
         vterm_input_write((VTerm *)t->vt, bytes, (size_t)n);
