@@ -1,6 +1,6 @@
 # Dívida arquitetural conhecida (audit #90, #123–127)
 
-Achados de tipo `ARCH` do `docs/auditoria-dispd-ntwm-relatorio.md`. Não são bugs
+Achados de tipo `ARCH` do `docs/auditoria/dispd-ntwm-relatorio.md`. Não são bugs
 pontuais — são características do desenho atual. Registrados aqui com a direção,
 para não se perderem e para orientar refactors futuros.
 

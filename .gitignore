@@ -1,30 +1,50 @@
+# NOTA: o Git nao suporta comentario no fim da linha. Um "padrao/  # texto"
+# vira o padrao literal inteiro e nao casa com nada. Comentario so em linha
+# propria, como estas.
+
 # === Artefatos de build ===
 out/
 build/work/
-# fontes externas baixadas (musl, busybox) + windows.iso
-build/deps/
 musl-nt/build/
 *.o
 *.a
 *.exe
+*.obj
+*.lib
+*.dll
+*.pdb
+
+# fontes externas baixadas pelo `make deps` (musl, busybox) + a ISO do Windows
+build/deps/
 
 # === Imagens geradas / VM ===
 *.iso
+*.img
 *.qcow2
 *.vhd
 *.vhdx
 build/vm/
 
-# === Logs de runtime / diagnóstico ===
-fork.log
+# === Logs de runtime / diagnostico ===
 *.log
+core
+*.core
+*.stackdump
 
-# === Configs locais de ferramentas (não compartilhadas) ===
+# === Configs locais de ferramentas (nao compartilhadas) ===
 .claude/settings.local.json
 .codex/
+.agents/
+compile_commands.json
+.cache/
 
 # === Editor / SO ===
 *.swp
 *.swo
 *~
+*.orig
+*.rej
 .DS_Store
+Thumbs.db
+.idea/
+.vscode/

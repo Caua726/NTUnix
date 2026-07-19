@@ -77,7 +77,7 @@ No mínimo, leia integralmente:
 - `etc/ntwm/ntwm.conf`
 - `etc/units/dispd.service`
 - `etc/units/ntwm.service`
-- `docs/desktop-known-gaps.md`
+- `docs/auditoria/desktop-known-gaps.md`
 - `docs/PROTOCOLO.md`
 - `README.md`
 - `Makefile`

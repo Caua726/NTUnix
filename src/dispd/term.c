@@ -1,10 +1,14 @@
 /*
- * term.c — fabrica de terminais: escolhe o backend (ConPTY -> scrape) e
- * roteia input/resize/close. O parser+grade (vt.c) e' comum aos backends.
+ * term.c — fabrica de terminais: escolhe o backend e roteia input/resize/close.
+ * O parser+grade (vt.c) e' comum aos backends.
  *
- * DISPD_TERM seleciona o backend p/ diagnostico: "conpty" (so ConPTY), "scrape"
- * (so console real), "demo" (alimenta o libvterm com um stream VT fixo — valida
- * render/janela sem depender do pty). Default: ConPTY com fallback scrape.
+ * Default HIBRIDO (ver terminal_spawn): app nativo do Windows -> scrape, com
+ * conpty de fallback; nossos programas Unix -> pty nativo (musl-nt), com scrape
+ * de fallback.
+ *
+ * DISPD_TERM forca um backend p/ diagnostico: "pty" (so pty nativo), "conpty"
+ * (so ConPTY), "scrape" (so console real), "demo" (alimenta o libvterm com um
+ * stream VT fixo — valida render/janela sem depender do pty).
  */
 #include "term.h"
 

@@ -1,5 +1,8 @@
 # musl-nt: LP64 musl 1.2.6 lowered to Win64/COFF plus the NT syscall backend.
-MUSL_SRC ?= /tmp/musl-1.2.6
+# Fontes externas: baixadas em build/deps pelo `make deps` da raiz (persistente,
+# NAO /tmp). O Makefile da raiz sempre passa MUSL_SRC/BUSYBOX_SRC explicitamente;
+# estes defaults so valem pra quem roda `make -C musl-nt` direto.
+MUSL_SRC ?= $(abspath ..)/build/deps/musl-1.2.6
 BUILD    ?= build
 MINGW_CC ?= x86_64-w64-mingw32-gcc
 AR       ?= x86_64-w64-mingw32-ar
@@ -7,7 +10,7 @@ RANLIB   ?= x86_64-w64-mingw32-ranlib
 OBJDUMP  ?= x86_64-w64-mingw32-objdump
 WINE     ?= wine
 TIMEOUT  ?= timeout
-BUSYBOX_SRC ?= /tmp/bbsrc
+BUSYBOX_SRC ?= $(abspath ..)/build/deps/busybox-1.37.0
 LP64_CC  := tools/lp64-coff-cc
 CC_REWRITE := $(BUILD)/tools/sysv-coff-rewrite
 ROOT     := $(abspath .)

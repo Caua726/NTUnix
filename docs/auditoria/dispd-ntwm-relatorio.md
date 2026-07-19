@@ -11,7 +11,7 @@ O estado inicial observado foi:
 
 ```text
 ## main
-?? docs/auditoria-dispd-ntwm-prompt.md
+?? docs/auditoria/dispd-ntwm-prompt.md
 ```
 
 > Nota: este é o estado registrado no início da auditoria. O working tree recebeu
@@ -1331,10 +1331,10 @@ build/strip.list | 35 | integral | B | remoções da imagem
 build/test-vm.sh | 27 | integral | T | VM, não executado
 build/vm-setup.sh | 46 | integral | T | VM, não executado
 build/winpeshl.ini | 7 | integral | B | WinPE → ntsession
-docs/auditoria-dispd-ntwm-prompt.md | 484 | integral | D | manifesto da auditoria
+docs/auditoria/dispd-ntwm-prompt.md | 484 | integral | D | manifesto da auditoria
 docs/PROTOCOLO.md | 68 | integral | D | contrato do initd
 docs/VISAO.md | 1133 | integral | D | arquitetura normativa
-docs/desktop-known-gaps.md | 91 | integral | D | garantias/gaps
+docs/auditoria/desktop-known-gaps.md | 91 | integral | D | garantias/gaps
 docs/musl-nt-spec.md | 386 | integral | D | contrato libc/PTY
 docs/pesquisa/bb-coreutils-funcoes-libc-consumidas.txt | 242 | integral | D | BusyBox/libc
 docs/pesquisa/bb-coreutils-headers-fecho-completo.txt | 477 | integral | D | closure headers
