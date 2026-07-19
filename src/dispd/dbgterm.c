@@ -79,14 +79,19 @@ static DWORD WINAPI bridge_thread(LPVOID arg)
     }
 }
 
-/* chamado no boot do dispd (dispd.c). No-op fora de dev. */
-void dbgterm_start(void)
+/* chamado no boot do dispd (dispd.c). Retorna 1 se ativou o terminal de debug
+ * (build de dev), 0 se nao (o dispd abre o terminal normal). Gate = arquivo
+ * marcador /etc/ntunix-debug, criado pelo stage-files so em dev (NTUNIX_DEBUG=1) —
+ * o env NTUNIX_DEBUG e' de BUILD, nao existe no runtime da VM. */
+int dbgterm_start(void)
 {
-    char v[8];
-    if (GetEnvironmentVariableA("NTUNIX_DEBUG", v, sizeof v) == 0)
-        return;                       /* so em build de dev */
+    char marker[512];
+    ntu_path("/etc/ntunix-debug", marker, sizeof marker);
+    if (GetFileAttributesA(marker) == INVALID_FILE_ATTRIBUTES)
+        return 0;                     /* nao e' build de dev */
     g_dbgwin = spawn_terminal(0);     /* terminal visivel, shell padrao */
-    if (!g_dbgwin) { dispd_log("dbgterm: spawn_terminal falhou"); return; }
+    if (!g_dbgwin) { dispd_log("dbgterm: spawn_terminal falhou"); return 1; }
     CreateThread(0, 0, bridge_thread, 0, 0, 0);
     dispd_log("dbgterm: terminal de debug compartilhado ativo (rede 10.0.2.2:%d)", DBG_PORT);
+    return 1;
 }

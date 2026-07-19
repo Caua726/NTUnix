@@ -110,8 +110,12 @@ stage-files: | $(BIN)
 	@# gated por NTUNIX_DEBUG no proprio dispd) -> o ntdbgcon separado nao e' mais
 	@# habilitado (conflitaria na mesma porta 2323).
 	rm -f $(OUT)/etc/units/enabled/ntdbgcon
+	@# marcador de dev lido pelo dispd em runtime (o env NTUNIX_DEBUG e' so de build)
 	@if [ "$(NTUNIX_DEBUG)" = "1" ]; then \
+	    touch $(OUT)/etc/ntunix-debug; \
 	    echo "  [dev] terminal de debug COMPARTILHADO (dbgterm no dispd) ativo"; \
+	else \
+	    rm -f $(OUT)/etc/ntunix-debug; \
 	fi
 
 smoke: all
