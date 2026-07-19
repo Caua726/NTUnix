@@ -62,20 +62,27 @@ int main(void)
     logln("ntdbgcon: dir", 0xFFFFFFFFu);
     logln(g_dir, 0xFFFFFFFFu);
 
-    /* abre a COM1, com retry (o driver serial pode demorar a subir no boot) */
+    /* abre a serial: varre COM1..COM8 (pode enumerar como outro numero sob UEFI),
+     * com retry (o driver serial pode demorar a subir no boot). */
     com = INVALID_HANDLE_VALUE;
-    for (tries = 0; tries < 30; tries++) {
-        com = CreateFileA("\\\\.\\COM1", GENERIC_READ | GENERIC_WRITE,
-                          0, NULL, OPEN_EXISTING, 0, NULL);
-        if (com != INVALID_HANDLE_VALUE) break;
-        logln("ntdbgcon: CreateFile(COM1) falhou", GetLastError());
-        Sleep(1000);
+    for (tries = 0; tries < 30 && com == INVALID_HANDLE_VALUE; tries++) {
+        char dev[] = "\\\\.\\COM1";
+        int cn;
+        for (cn = 1; cn <= 8; cn++) {
+            dev[7] = (char)('0' + cn);
+            com = CreateFileA(dev, GENERIC_READ | GENERIC_WRITE,
+                              0, NULL, OPEN_EXISTING, 0, NULL);
+            if (com != INVALID_HANDLE_VALUE) { logln("ntdbgcon: serial aberta em COM", (unsigned)cn); break; }
+        }
+        if (com == INVALID_HANDLE_VALUE) {
+            logln("ntdbgcon: nenhuma COM1-8 (retry)", GetLastError());
+            Sleep(1000);
+        }
     }
     if (com == INVALID_HANDLE_VALUE) {
-        logln("ntdbgcon: DESISTINDO da COM1 (sem serial no guest?)", 0xFFFFFFFFu);
+        logln("ntdbgcon: DESISTINDO — nenhuma serial enumerada no guest", 0xFFFFFFFFu);
         return 1;
     }
-    logln("ntdbgcon: COM1 aberta OK", 0xFFFFFFFFu);
 
     ZeroMemory(&dcb, sizeof dcb);
     dcb.DCBlength = sizeof dcb;
