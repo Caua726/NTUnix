@@ -83,10 +83,24 @@ tail -f /tmp/ncout             # acompanha a saída (= o que aparece na tela da 
 ## Limitação conhecida / bug aberto
 
 Ao dirigir o terminal real (tty do desktop) pelo canal, apareceu um bug que o shell
-por pipe mascarava: **`ls` (sem args, no diretório atual) sai vazio com exit code 5**,
-enquanto `ls <caminho>`, `echo` e `uname` funcionam. Não é o multi-coluna (o `ls -1`
-também sai vazio). Suspeita: `getcwd`/`opendir(".")` no ambiente desse terminal.
-Investigar com o próprio canal (`pwd`, `ls .` vs `ls /mnt/x/NTUnix`, `cd` + `ls`).
+por pipe mascarava: **`ls` sai vazio com exit code 5**. Não é o multi-coluna — `ls -1`
+e `ls -la` também saem vazios.
+
+Medido em 2026-07-19, pelo canal, com o dispd em execução:
+
+| Comando | Resultado |
+|---|---|
+| `ls`, `ls -1`, `ls -la` | vazio, rc=5 |
+| `ls /mnt/x/NTUnix` | **vazio também** — com caminho explícito não resolve |
+| `echo /system/bin/*.exe` | **lista os 10 binários** |
+| `pwd` | `/mnt/x/NTUnix` |
+| `cd` + TAB | completa os diretórios (`etc/ obj/ proc/ run/ system/ var/`) |
+| `uname -a`, `id`, `cat`, `df -h` | funcionam |
+
+O glob do ash percorre o mesmo diretório e acerta, e o `cd` completa — então
+`opendir`/`getcwd` **não** são a causa (a suspeita anterior). O defeito está no
+caminho do applet `ls` do BusyBox. Próximo passo: comparar o que o `ls` faz a mais
+que o glob — provavelmente o `stat`/`lstat` por entrada, ou o buffer de `getdents`.
 
 > Este é justamente o valor do terminal compartilhado: ele **reflete o sistema real**
 > (mesmo tty, mesmo shell) e não esconde bugs específicos de tty como um pipe faria.
