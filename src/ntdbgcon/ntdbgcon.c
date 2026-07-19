@@ -108,6 +108,12 @@ int main(void)
         logln("ntdbgcon: WSAStartup falhou", (unsigned long)WSAGetLastError());
         return 1;
     }
+    /* NTU_PTY=1 no env -> os pipes stdio do busybox (musl-nt) sao reclassificados
+     * NT_FD_PIPE->NT_FD_PTY: isatty=true, termios/canonical, ONLCR, echo (echo vai
+     * pro fd 1). Assim o canal se comporta como TTY REAL, igual ao terminal do
+     * desktop (ls multi-coluna etc.) -> o teste reflete o sistema de verdade, nao
+     * mascara bugs de tty. O busybox herda o env deste processo. */
+    SetEnvironmentVariableA("NTU_PTY", "1");
 
     for (;;) {
         SOCKET s;
