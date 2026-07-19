@@ -140,6 +140,11 @@ nt_sc_t nt_sys_getdents64(nt_sc_t fd, nt_sc_t buf_arg, nt_sc_t count_arg)
         dent->d_reclen = (uint16_t)record_len;
         dent->d_type = nt_dtype_from_attributes(info->FileAttributes, 0);
         nt_memcpy(dent->d_name, name, name_len + 1);
+        if (slot->dir_cookie <= 12) {   /* DEBUG: offset, reclen e o d_name JA ESCRITO (o que a musl le) */
+            ls_dbg("at_off", (unsigned long long)used);
+            ls_dbg("reclen", (unsigned long long)record_len);
+            ls_dbg_name(dent->d_name, name_len);
+        }
         used += record_len;
         if (cap - used < offsetof(struct nt_linux_dirent64, d_name) + 2)
             break;
