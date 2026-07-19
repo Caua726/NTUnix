@@ -62,6 +62,33 @@ int main(void)
     logln("ntdbgcon: dir", 0xFFFFFFFFu);
     logln(g_dir, 0xFFFFFFFFu);
 
+    /* WinPE NAO carrega o driver serial por padrao (a COM nao enumera, mesmo com
+     * serial.sys/msports.inf presentes). `drvload msports.inf` forca o PnP a
+     * bindar o serial.sys no PNP0501 -> a COM aparece. (Microsoft Q&A: WinPE COM
+     * support via drvload.) Roda antes de tentar abrir a COM. */
+    {
+        char windir[MAX_PATH], dexe[MAX_PATH], dcmd[MAX_PATH * 2];
+        STARTUPINFOA dsi;
+        PROCESS_INFORMATION dpi;
+        if (GetWindowsDirectoryA(windir, sizeof windir)) {
+            lstrcpyA(dexe, windir); lstrcatA(dexe, "\\System32\\drvload.exe");
+            dcmd[0] = '"'; lstrcpyA(dcmd + 1, dexe);
+            lstrcatA(dcmd, "\" \""); lstrcatA(dcmd, windir);
+            lstrcatA(dcmd, "\\INF\\msports.inf\"");
+            logln("ntdbgcon: drvload do serial:", 0xFFFFFFFFu);
+            logln(dcmd, 0xFFFFFFFFu);
+            ZeroMemory(&dsi, sizeof dsi); dsi.cb = sizeof dsi;
+            ZeroMemory(&dpi, sizeof dpi);
+            if (CreateProcessA(dexe, dcmd, NULL, NULL, FALSE, 0, NULL, NULL, &dsi, &dpi)) {
+                WaitForSingleObject(dpi.hProcess, 20000);
+                CloseHandle(dpi.hProcess); CloseHandle(dpi.hThread);
+                logln("ntdbgcon: drvload terminou", 0xFFFFFFFFu);
+            } else {
+                logln("ntdbgcon: drvload NAO rodou", GetLastError());
+            }
+        }
+    }
+
     /* abre a serial: varre COM1..COM8 (pode enumerar como outro numero sob UEFI),
      * com retry (o driver serial pode demorar a subir no boot). */
     com = INVALID_HANDLE_VALUE;
