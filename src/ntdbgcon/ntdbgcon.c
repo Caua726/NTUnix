@@ -51,7 +51,7 @@ static void run_and_log(const char *exe, char *cmd, const char *label)
     logln(label, 0xFFFFFFFFu);
     logln(cmd, 0xFFFFFFFFu);
     if (CreateProcessA(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
-        WaitForSingleObject(pi.hProcess, 25000);
+        WaitForSingleObject(pi.hProcess, 90000);   /* dism/DismHost pode demorar */
         GetExitCodeProcess(pi.hProcess, &ec);
         CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
         logln("  -> exit code", ec);
@@ -90,14 +90,17 @@ int main(void)
     {
         char win32[MAX_PATH], exe[MAX_PATH], inf[MAX_PATH], cmd[MAX_PATH * 2 + 16];
         GetSystemDirectoryA(win32, sizeof win32);   /* X:\Windows\System32 */
-        /* 1) instala o INF da serial PCI. O drvload deu exit 3 (fraco pra INF
-         * MultiFunction c/ co-installer mf.inf) -> usa pnputil /add-driver /install,
-         * que poe no driver store E instala nos devices que casam (VEN_1B36). */
-        lstrcpyA(exe, win32); lstrcatA(exe, "\\pnputil.exe");
+        /* 1) instala o INF da serial PCI. O pnputil deu 0xE000022F (INF sem catalogo/
+         * assinatura, recusado pelo WinPE x64 UEFI). dism /online /Add-Driver com
+         * /ForceUnsigned BYPASSA a checagem de assinatura -> instala o INF nao
+         * assinado. (O nointegritychecks da BCD e' ignorado no x64; /ForceUnsigned e'
+         * o caminho certo.) DismHost.exe pode demorar; timeout maior no helper. */
+        lstrcpyA(exe, win32); lstrcatA(exe, "\\Dism.exe");
         lstrcpyA(inf, g_dir); lstrcatA(inf, "\\qemupciserial.inf");
         cmd[0] = '"'; lstrcpyA(cmd + 1, exe);
-        lstrcatA(cmd, "\" /add-driver \""); lstrcatA(cmd, inf); lstrcatA(cmd, "\" /install");
-        run_and_log(exe, cmd, "ntdbgcon: pnputil /add-driver qemupciserial.inf /install");
+        lstrcatA(cmd, "\" /online /Add-Driver /Driver:\""); lstrcatA(cmd, inf);
+        lstrcatA(cmd, "\" /ForceUnsigned");
+        run_and_log(exe, cmd, "ntdbgcon: dism /Add-Driver /ForceUnsigned");
         /* 2) forca o PnP a re-escanear -> binda o INF no device VEN_1B36 e cria os
          * filhos COM (*PNP0501 -> serial.sys). Sem o rescan o WinPE nao enumera o
          * device recem-instalado (drvload so poe o driver no store). */
