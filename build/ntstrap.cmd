@@ -13,6 +13,11 @@ rem
 rem Ferramentas: diskpart, dism, bcdboot e reg sao todas inbox no WinPE.
 rem ============================================================================
 
+rem PATH proprio. Quando o ntstrap e' chamado do shell do NTUnix, o cmd.exe
+rem herda um PATH estilo Unix (/mnt/x/windows/system32) que ele nao entende -
+rem e perde diskpart, dism, reg e bcdboot de uma vez so'.
+set PATH=%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\Wbem
+
 set DISK=%~1
 set INDEX=%~2
 if "%DISK%"=="" set DISK=0
