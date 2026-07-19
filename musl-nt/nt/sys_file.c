@@ -4,7 +4,17 @@ static enum nt_fd_kind kind_from_handle(HANDLE h)
 {
     BY_HANDLE_FILE_INFORMATION info;
     DWORD type = GetFileType(h);
-    if (type == FILE_TYPE_CHAR) return NT_FD_CONSOLE;
+    if (type == FILE_TYPE_CHAR) {
+        /* char device = console OU porta serial (COM). Serial passa por
+         * ReadFile/WriteFile (NT_FD_FILE), nao pelo caminho de console — senao o
+         * shell no canal de debug serial nao le/escreve. GetCommState so vale em
+         * serial. */
+        DCB dcb;
+        dcb.DCBlength = sizeof dcb;
+        if (GetCommState(h, &dcb))
+            return NT_FD_FILE;
+        return NT_FD_CONSOLE;
+    }
     if (type == FILE_TYPE_PIPE) return NT_FD_PIPE;
     if (type == FILE_TYPE_DISK && GetFileInformationByHandle(h, &info) &&
         (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
@@ -104,6 +114,35 @@ static int nt_dev_open(const char *path, int flags, nt_sc_t *result)
                         FILE_SHARE_READ | FILE_SHARE_WRITE,
                         0, OPEN_EXISTING, 0, 0);
         kind = NT_FD_CONSOLE;
+    } else if (rest[0] == 't' && rest[1] == 't' && rest[2] == 'y' &&
+               rest[3] == 'S' && rest[4] >= '0' && rest[4] <= '3' && !rest[5]) {
+        /* /dev/ttyS0..3 -> \\.\COM1..4 — canal de debug serial (QEMU -serial).
+         * Configura raw 115200 8N1 e leitura que BLOQUEIA ate >=1 byte (semantica
+         * de tty pro shell). Fica NT_FD_FILE: read/write por ReadFile/WriteFile. */
+        WCHAR com[10];
+        DCB dcb;
+        COMMTIMEOUTS to;
+        com[0]=L'\\'; com[1]=L'\\'; com[2]=L'.'; com[3]=L'\\';
+        com[4]=L'C'; com[5]=L'O'; com[6]=L'M';
+        com[7]=(WCHAR)(L'1' + (rest[4] - '0')); com[8]=0;
+        h = CreateFileW(com, GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING, 0, 0);
+        if (h != INVALID_HANDLE_VALUE) {
+            nt_memset(&dcb, 0, sizeof dcb);
+            dcb.DCBlength = sizeof dcb;
+            if (GetCommState(h, &dcb)) {
+                dcb.BaudRate = 115200;
+                dcb.ByteSize = 8;
+                dcb.Parity   = 0;   /* NOPARITY */
+                dcb.StopBits = 0;   /* ONESTOPBIT */
+                dcb.fBinary  = 1;
+                SetCommState(h, &dcb);
+            }
+            nt_memset(&to, 0, sizeof to);
+            to.ReadIntervalTimeout        = 0xFFFFFFFFu;  /* recipe: bloqueia ate >=1 byte */
+            to.ReadTotalTimeoutMultiplier = 0xFFFFFFFFu;
+            to.ReadTotalTimeoutConstant   = 0xFFFFFFFEu;
+            SetCommTimeouts(h, &to);
+        }
     } else {
         return 0; /* /dev/<desconhecido>: cai na resolução normal (ENOENT) */
     }

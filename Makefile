@@ -33,7 +33,8 @@ DISPD_HDR := src/dispd/dispd.h src/dispd/present.h src/dispd/term.h \
 NTWM_SRC  := src/ntwm/ntwm.c src/ntwm/proto.c src/ntwm/layout.c
 
 BINS := $(BIN)/initd.exe $(BIN)/ntctl.exe $(BIN)/logd.exe $(BIN)/demod.exe \
-        $(BIN)/ntsession.exe $(BIN)/dispd.exe $(BIN)/ntwm.exe $(BIN)/ntclock.exe
+        $(BIN)/ntsession.exe $(BIN)/dispd.exe $(BIN)/ntwm.exe $(BIN)/ntclock.exe \
+        $(BIN)/ntdbgcon.exe
 
 all: $(BINS) stage-files
 
@@ -52,6 +53,10 @@ $(BIN)/demod.exe: src/demod/demod.c $(COMMON) src/common/ntu.h | $(BIN)
 # shell da sessao: sem console proprio (-mwindows)
 $(BIN)/ntsession.exe: src/ntsession/ntsession.c $(COMMON) src/common/ntu.h | $(BIN)
 	$(CC) $(CFLAGS) -mwindows -o $@ src/ntsession/ntsession.c $(COMMON)
+
+# console de debug via serial (DEV): abre COM1 + roda o busybox sh nela. So kernel32.
+$(BIN)/ntdbgcon.exe: src/ntdbgcon/ntdbgcon.c | $(BIN)
+	$(CC) $(CFLAGS) -mwindows -o $@ src/ntdbgcon/ntdbgcon.c
 
 # ConPTY: headers 0x0A00, mas as 3 funcoes vem via GetProcAddress (fallback WinPE).
 $(OUT)/obj:
@@ -99,6 +104,13 @@ stage-files: | $(BIN)
 	cp proc/mounts $(OUT)/proc/
 	touch $(OUT)/etc/units/enabled/logd $(OUT)/etc/units/enabled/demod
 	touch $(OUT)/etc/units/enabled/dispd $(OUT)/etc/units/enabled/ntwm
+	@# console de debug serial: SO em build de dev (NTUNIX_DEBUG=1)
+	@if [ "$(NTUNIX_DEBUG)" = "1" ]; then \
+	    touch $(OUT)/etc/units/enabled/ntdbgcon; \
+	    echo "  [dev] ntdbgcon (console serial de debug) HABILITADO"; \
+	else \
+	    rm -f $(OUT)/etc/units/enabled/ntdbgcon; \
+	fi
 
 smoke: all
 	./test/smoke.sh
@@ -121,6 +133,16 @@ live:
 	else \
 		echo ">> boot da VM pulado (NO_BOOT setado ou virsh ausente)"; \
 	fi
+
+# ---- console serial de debug (SO DEV) ----
+# Um comando: builda com o ntdbgcon ligado, redefine a VM com a COM1 num socket
+# TCP do host, e boota. Depois conecte:  nc 127.0.0.1 4555  -> shell da NTUnix,
+# pra rodar comandos/ler logs sem print/loop. Nunca use isto em build de producao.
+debug-live:
+	$(MAKE) live NTUNIX_DEBUG=1 NO_BOOT=1
+	NTUNIX_DEBUG=1 ./build/vm-setup.sh "$(OUT_ISO)"
+	@command -v $(firstword $(VIRSH)) >/dev/null 2>&1 && $(VIRSH) start $(VM_NAME) || true
+	@echo ">> canal serial de debug pronto:  nc 127.0.0.1 $${NTUNIX_DBG_PORT:-4555}"
 
 # ISO instalavel (aplica o Windows completo estilo pacstrap). FAZ TUDO tambem.
 #   make iso [WIN_ISO=/caminho/Win11.iso] [OUT_ISO=NTUnix.iso]
@@ -160,5 +182,5 @@ busybox-nt-test: deps
 clean:
 	rm -rf $(OUT) build/work
 
-.PHONY: all clean stage-files smoke live iso check-build deps musl-nt \
+.PHONY: all clean stage-files smoke live iso debug-live check-build deps musl-nt \
 	musl-nt-test busybox-nt busybox-nt-test

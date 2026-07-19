@@ -1,0 +1,16 @@
+# ntdbgcon — console de debug via porta serial (COM1). SO EM BUILD DE DEV.
+#
+# Abre a COM1 (ligada pelo QEMU a um socket/pty no host) e roda o busybox `sh`
+# nela. Permite conectar no socket serial do host e cair num shell da NTUnix sem
+# depender da rede da VM nem de print/loop. Canal SEM autenticacao -> nunca
+# habilitar em producao. So e' ativado quando o build roda com NTUNIX_DEBUG=1
+# (o marker enabled/ntdbgcon so e' criado nesse caso).
+[Unit]
+Description=NTUnix debug serial console (DEV only, COM1)
+
+[Service]
+ExecStart=/system/bin/ntdbgcon.exe
+Restart=always
+
+[Install]
+WantedBy=default.target

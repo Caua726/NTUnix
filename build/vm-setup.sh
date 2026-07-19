@@ -21,6 +21,14 @@ mkdir -p "$REPO/build/vm"
 # disco de 40G (nao usado pelo live, mas pronto pro instalador futuro)
 [ -f "$DISK" ] || qemu-img create -f qcow2 "$DISK" 40G >/dev/null
 
+# canal de debug serial (DEV): NTUNIX_DEBUG=1 liga a COM1 do guest a um socket TCP
+# do host, pra conectar num shell da NTUnix sem depender da rede da VM. So em dev.
+SERIAL_ARGS=()
+DBGPORT="${NTUNIX_DBG_PORT:-4555}"
+if [ "${NTUNIX_DEBUG:-}" = "1" ]; then
+    SERIAL_ARGS=(--serial "tcp,host=127.0.0.1:${DBGPORT},mode=bind,protocol.type=raw")
+fi
+
 # idempotente: destrói e redefine a VM
 virsh -c "$CONN" destroy  "$NAME" 2>/dev/null || true
 virsh -c "$CONN" undefine --nvram "$NAME" 2>/dev/null || true
@@ -38,7 +46,15 @@ virt-install \
     --video qxl \
     --sound none \
     --network user \
+    "${SERIAL_ARGS[@]}" \
     --noautoconsole
+
+if [ "${NTUNIX_DEBUG:-}" = "1" ]; then
+    echo
+    echo "[dev] console serial de debug ligado na COM1 -> TCP 127.0.0.1:${DBGPORT}"
+    echo "      quando a VM bootar, conecte com:  nc 127.0.0.1 ${DBGPORT}"
+    echo "      (ou: socat -,raw,echo=0 TCP:127.0.0.1:${DBGPORT})"
+fi
 
 echo
 echo "VM '$NAME' definida em $CONN."
