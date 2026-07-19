@@ -28,7 +28,8 @@ mkdir -p "$REPO/build/vm"
 SERIAL_ARGS=()
 DBGPORT="${NTUNIX_DBG_PORT:-4555}"
 if [ "${NTUNIX_DEBUG:-}" = "1" ]; then
-    SERIAL_ARGS=(--qemu-commandline="-chardev socket,id=dbgser,host=127.0.0.1,port=${DBGPORT},server=on,wait=off -device pci-serial,chardev=dbgser")
+    # addr=0x08: slot PCI livre no bus 0 (0x01/02/03/1f ja usados por video/root-ports/lpc)
+    SERIAL_ARGS=(--qemu-commandline="-chardev socket,id=dbgser,host=127.0.0.1,port=${DBGPORT},server=on,wait=off -device pci-serial,chardev=dbgser,addr=0x08")
 fi
 
 # idempotente: destrói e redefine a VM

@@ -118,8 +118,22 @@ int main(void)
         dcb.ByteSize = 8;
         dcb.Parity   = NOPARITY;
         dcb.StopBits = ONESTOPBIT;
+        /* raw COMPLETO: sem paridade, sem flow-control (senao WriteFile pode
+         * bloquear se CTS/DSR estiver baixo), sem XON/XOFF, sem abort-on-error */
         dcb.fBinary  = TRUE;
-        SetCommState(com, &dcb);
+        dcb.fParity  = FALSE;
+        dcb.fOutxCtsFlow = FALSE;
+        dcb.fOutxDsrFlow = FALSE;
+        dcb.fDsrSensitivity = FALSE;
+        dcb.fOutX = FALSE;
+        dcb.fInX  = FALSE;
+        dcb.fErrorChar = FALSE;
+        dcb.fNull = FALSE;
+        dcb.fAbortOnError = FALSE;
+        dcb.fDtrControl = DTR_CONTROL_ENABLE;
+        dcb.fRtsControl = RTS_CONTROL_ENABLE;
+        if (!SetCommState(com, &dcb))
+            logln("ntdbgcon: SetCommState falhou", GetLastError());
     } else {
         logln("ntdbgcon: GetCommState falhou", GetLastError());
     }
@@ -152,15 +166,18 @@ int main(void)
         lstrcpyA(cmd + 1, busybox);
         lstrcatA(cmd, "\" sh -i");
 
-        WriteFile(com, banner, (DWORD)lstrlenA(banner), &w, NULL);
-
         ZeroMemory(&pi, sizeof pi);
         if (CreateProcessA(busybox, cmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+            DWORD ec = 0;
+            /* banner SO depois do spawn ok (senao mentia); WriteFile nao bloqueia
+             * mais — flow-control foi limpo no DCB */
+            WriteFile(com, banner, (DWORD)lstrlenA(banner), &w, NULL);
             logln("ntdbgcon: shell spawnado", 0xFFFFFFFFu);
             WaitForSingleObject(pi.hProcess, INFINITE);
+            GetExitCodeProcess(pi.hProcess, &ec);   /* review: logar o exit code (0xC0000135=DLL faltando) */
             CloseHandle(pi.hProcess);
             CloseHandle(pi.hThread);
-            logln("ntdbgcon: shell saiu — respawn", 0xFFFFFFFFu);
+            logln("ntdbgcon: shell saiu (exit)", ec);
         } else {
             logln("ntdbgcon: CreateProcess(busybox) falhou", GetLastError());
             logln(busybox, 0xFFFFFFFFu);
