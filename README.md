@@ -2,202 +2,144 @@
 
 > Unix philosophy. NT foundation.
 
-NTUnix é um sistema operacional experimental que mantém o **kernel NT e os
-drivers do Windows** como fundação, e substitui todo o user space por uma
-arquitetura modular inspirada em Linux e Unix: um supervisor de serviços, uma
-libc própria, um display server, um window manager em tiling e coreutils
-BusyBox.
+An experimental operating system that keeps the Windows NT kernel and its
+drivers, and replaces everything above them. The Windows user space is stripped
+out and a Unix-like one is built in its place: a service supervisor, a libc that
+talks to NT directly, a display server, a tiling window manager, and BusyBox
+coreutils.
 
-**Em uma frase:** um user space Unix-like construído sobre o kernel NT, com
-compatibilidade Windows integrada.
+Nothing here runs on an emulation layer. `musl-nt` is a real libc port — musl
+1.2.6 lowered to PE/x86-64 with no UCRT and no MSVCRT — and BusyBox builds
+against it unpatched, 80+ applets. `dispd` draws through GDI or DXGI. `initd`
+supervises with NT Job Objects.
 
-Estado: **`0.1.0-dev`** — experimental, boota em VM, não use como sistema
-principal.
+Around 8,000 lines of C across the user space, plus 4,700 in the musl-nt NT
+backend. x86_64, cross-compiled from Linux.
 
-## Por que
-
-O kernel NT é bom. O que afasta quem vem de Unix é o user space em volta dele:
-o modelo de processos, o shell, a ausência de composabilidade, a telemetria. O
-NTUnix parte da premissa de que dá pra manter o kernel e os drivers — que
-resolvem hardware e compatibilidade melhor do que qualquer projeto de hobby
-conseguiria — e trocar apenas a camada de cima.
-
-Isso significa que nada aqui roda sobre uma camada de emulação. A `musl-nt` é
-uma libc que fala com o NT direto; o `dispd` desenha na tela pelo GDI/DXGI; o
-`initd` supervisiona com Job Objects nativos.
-
-## Como funciona a distribuição
-
-NTUnix **não redistribui nada da Microsoft**. Você fornece uma **ISO oficial do
-Windows** e uma licença válida; a base de build trata essa ISO localmente:
-
-1. extrai a ISO de origem;
-2. **remove o user space padrão do Windows** (apps provisionados, OneDrive, Edge
-   integrado, wallpapers extras — ver [`build/strip.list`](build/strip.list));
-3. **injeta a árvore do NTUnix** em `\NTUnix` dentro da imagem;
-4. planta os hooks de primeiro boot ([`autounattend.xml`](build/autounattend.xml)
-   + [`SetupComplete.cmd`](build/SetupComplete.cmd)): o **shell da sessão vira o
-   `ntsession`** no lugar do `explorer.exe`, e serviços/telemetria não essenciais
-   são desligados;
-5. reempacota uma ISO híbrida bootável (BIOS + UEFI).
-
-O resultado boota, instala e cai direto no ambiente NTUnix — kernel NT e drivers
-da Microsoft embaixo, user space nosso em cima.
-
-## Status
-
-Coluna "estado" é o que o código faz hoje, não o que a arquitetura pretende.
-
-### Base do sistema
-
-| Componente | Estado | O que é |
-|---|---|---|
-| `initd` | ✅ funcional | Supervisor: units `.service`, Job Objects com kill-on-close, `Restart=` com throttle, deps `Requires=`, `MemoryMax=`, pipe de controle. O componente mais maduro. |
-| `ntctl` | ✅ funcional | Cliente do pipe: `list/status/start/stop/restart/enable/disable/logs/reload/ping/shutdown`. |
-| `ntsession` | ✅ funcional | Shell da sessão (substitui o `explorer.exe`): garante o initd, cede a tela ao dispd, e abre um shell de recuperação se o desktop não subir em ~15s. |
-| `logd` | 🌱 v0 | Pipe → `/var/log/system.log` com timestamp. Um cliente por vez, sem rotação, sem prioridade. |
-| `demod` | ✅ funcional | Serviço de demonstração (heartbeat + IPC com o logd). Existe para o smoke test exercitar supervisão. |
-| `ntpkg` | ⬜ não começado | Gerenciador de pacotes. |
-
-### Desktop
-
-| Componente | Estado | O que é |
-|---|---|---|
-| `dispd` | ✅ funcional | Display server e compositor (~3.700 linhas). Uma janela raiz real; cada janela do desktop é uma superfície lógica com DIB próprio. Damage tracking, blur/glass, cantos arredondados, animações, barra de status, abas. |
-| `ntwm` | ✅ funcional | Window manager em tiling derivado do dwm: master/stack, `mfact`, 9 workspaces, floating. Cliente externo e descartável — `ntctl restart ntwm` não derruba o dispd. |
-| Terminal | ✅ funcional | PTY nativo (o caminho principal) sobre a musl-nt, com libvterm como engine VT. Backends alternativos: ConPTY, scrape e demo. |
-| Fronteira apps↔dispd | 🌱 semente | Section object compartilhado (zero-copy, análogo NT do `wl_shm`). Funciona, mas o `ntclock` é o único cliente que existe. |
-| Janelas nativas Win32 | 🚧 parcial | Modelo komorebi/GlazeWM: descobre, remove moldura e tila janelas do Windows. Filtro de janela é heurístico; sem tratamento de UWP, DPI ou minimizar. |
-| Backend DXGI | 🚧 não validado | Flip-model carregado por `GetProcAddress`. Funciona, mas em VM sem WDDM cai em software e **não engata Independent Flip** — o bypass do DWM, que é a razão de existir do backend, segue não comprovado. GDI é o default e o fallback garantido. |
-
-### Runtime
-
-| Componente | Estado | O que é |
-|---|---|---|
-| `musl-nt` | ✅ funcional | Port da musl 1.2.6 para PE x86-64 **sem UCRT/MSVCRT**. Resolve o conflito LP64 (musl) vs LLP64 (Windows) compilando cada TU como Linux/LP64 e remarcando a convenção de chamada com uma ferramenta LLVM própria. `fork()` é deliberadamente indisponível. |
-| BusyBox NT | ✅ funcional | 80+ applets compilados contra a musl-nt **sem patch de código**, shell standalone/no-fork, com bateria de runtime sob Wine. |
-| Camada de caminhos | 🌱 semente | `/etc/x` → `<NTUNIX_ROOT>\etc\x`. Tradução mínima em [`src/common/ntupath.c`](src/common/ntupath.c). |
-
-## Build
-
-Cross-compile de Linux com mingw-w64. A `musl-nt` também requer **Clang/LLVM**
-(`llc`, `llvm-config` e headers) — ela usa uma ferramenta LLVM própria para
-reescrever a convenção de chamada. Para gerar a ISO: `wimlib`, `xorriso`, `7z`
-(ou `bsdtar`). Wine é usado pelos testes.
-
-```bash
-# Arch:   pacman -S mingw-w64-gcc clang llvm wimlib xorriso p7zip
-# Debian: apt install gcc-mingw-w64-x86-64 clang llvm wimlib-tools xorriso p7zip-full
+```sh
+make deps && make        # user space -> out/
+make smoke               # 19 runtime checks under Wine
+make live                # bootable live ISO from your own Windows ISO
 ```
 
-As fontes da musl e do BusyBox são externas e **não ficam no repositório**.
-`make deps` baixa as duas para `build/deps/` com verificação de sha256; é
-idempotente e roda automaticamente antes dos alvos que precisam delas.
+## How the image is built
 
-```bash
-make deps            # baixa musl + busybox para build/deps/ (automático)
-make                 # compila os binários e monta a árvore staged em out/
-make smoke           # roda o runtime sob Wine (19 checks)
-make check-build     # valida a base de build sem precisar de ISO (lint + dry-run)
+No Microsoft code is redistributed. You supply an official Windows ISO and a
+valid licence; the build treats it locally — strip the stock user space (`build/strip.list`),
+inject the NTUnix tree at `\NTUnix`, plant the first-boot hooks that make
+`ntsession` the session shell instead of `explorer.exe`, and repack a hybrid
+BIOS+UEFI ISO. It boots, installs, and lands directly in NTUnix.
 
-make musl-nt         # gera musl-nt/build/libc-nt.a + crt0.o
-make musl-nt-test    # hello, smoke, allocator e rede; rejeita UCRT/MSVCRT
-make busybox-nt      # compila e instala out/system/bin/busybox.exe
-make busybox-nt-test # bateria ampla dos coreutils sob Wine
+## Components
 
-make clean           # remove out/ e build/work (não mexe em build/deps)
+| | Lines | |
+|---|---|---|
+| `initd`     | 861  | Supervisor: `.service` units, Job Objects with kill-on-close, `Restart=` with throttle, `Requires=` deps, `MemoryMax=`, control pipe. The most mature piece. |
+| `dispd`     | 5610 | Display server and compositor. One real root window; every desktop window is a logical surface with its own DIB. Damage tracking, blur, rounded corners, open/close animation, status bar, tabs. |
+| `ntwm`      | 662  | Tiling window manager derived from dwm — master/stack, `mfact`, 9 workspaces, floating. An external client, and disposable: `ntctl restart ntwm` does not take the desktop down. |
+| `ntctl`     | 93   | Control client: `list status start stop restart enable disable logs reload ping shutdown`. |
+| `ntsession` | 117  | Session shell replacing `explorer.exe`. Brings up initd, hands the screen to dispd, opens a recovery shell if the desktop does not come up in ~15s. |
+| `logd`      | 76   | Pipe to `/var/log/system.log`, timestamped. One client at a time, no rotation, no priorities. |
+| `musl-nt`   | 4731 | The libc. Resolves LP64 (musl) against LLP64 (Windows) by compiling each TU as Linux/LP64 and rewriting the calling convention with a purpose-built LLVM tool, then lowering to COFF. File, dir, stat, statfs, mem, proc, pty, signal, time, ioctl and sockets. `fork()` is deliberately absent. |
+
+The terminal runs on a native PTY over musl-nt with libvterm as the VT engine;
+ConPTY and console-scrape backends exist as fallbacks (`DISPD_TERM=pty|conpty|scrape|demo`).
+Apps reach dispd through a shared section object — zero-copy, the NT analogue of
+`wl_shm` — with `ntclock` as the one client so far.
+
+## What's not there yet
+
+`ntpkg`, the package manager, has not been started; there is no package format
+and no way to install anything.
+
+The DXGI present backend works but has not proven its point: in a VM without
+WDDM it falls back to software and never engages Independent Flip, which is the
+whole reason the backend exists. GDI is the default and the guaranteed path.
+
+Native Win32 windows are tiled komorebi-style — discovered, unframed, snapped —
+but the filter is heuristic and there is no handling for UWP, DPI, or minimise.
+Path translation (`/etc/x` to `<NTUNIX_ROOT>\etc\x`) is a seed, not a VFS.
+`logd` is a timestamped append and nothing more.
+
+## Build and test
+
+Cross-compiled from Linux with mingw-w64. musl-nt additionally needs Clang and
+LLVM — it builds an LLVM tool to rewrite calling conventions. ISO work needs
+`wimlib`, `xorriso` and `7z`. Wine runs the tests.
+
+```sh
+pacman -S mingw-w64-gcc clang llvm wimlib xorriso p7zip          # Arch
+apt install gcc-mingw-w64-x86-64 clang llvm wimlib-tools xorriso p7zip-full   # Debian
 ```
 
-Para sobrescrever a origem das fontes: `MUSL_SRC=/caminho` e `BUSYBOX_SRC=/caminho`.
+musl and BusyBox sources stay out of the repo. `make deps` fetches both into
+`build/deps/` with pinned sha256, is idempotent, and runs automatically before
+the targets that need it.
 
-### Gerar a imagem
-
-Ponha a ISO oficial do Windows em `build/deps/windows.iso` — ou passe
-`WIN_ISO=/caminho.iso` em qualquer um dos alvos abaixo. Os dois fazem o build
-completo (deps + libc + busybox + binários) antes de empacotar.
-
-```bash
-make live            # ISO LIVE (WinPE); reinicia a VM libvirt ao final
-make live NO_BOOT=1  # o mesmo, sem tocar na VM
-make iso             # ISO instalável (aplica o Windows completo, estilo pacstrap)
-
-./build/test-vm.sh NTUnix.iso   # boota numa VM UEFI (QEMU/OVMF)
+```sh
+make                    # user space -> out/
+make smoke              # 19 runtime checks under Wine
+make check-build        # lint + image dry-run, no ISO required
+make musl-nt            # libc-nt.a + crt0.o
+make musl-nt-test       # hello, smoke, allocator, network; rejects UCRT/MSVCRT
+make busybox-nt         # busybox.exe against musl-nt
+make busybox-nt-test    # coreutils battery under Wine
 ```
 
-Variáveis úteis: `OUT_ISO=` muda o arquivo de saída, `NTUNIX_EDITIONS="1 6"`
-limita quais edições da imagem tratar, `NTUNIX_WORK=/caminho` muda o diretório
-de trabalho, `VM_NAME=` e `VIRSH=` apontam para outra VM.
+Put an official Windows ISO at `build/deps/windows.iso`, or pass `WIN_ISO=`.
+Both image targets do the full build first.
 
-Para o canal de debug da VM (`make debug-live`), ver
-[docs/canal-debug-vm.md](docs/canal-debug-vm.md). É só dev, sem autenticação —
-nunca em build de produção.
+```sh
+make live               # live ISO (WinPE); restarts the libvirt VM
+make live NO_BOOT=1     # same, without touching the VM
+make iso                # installable ISO, applies full Windows, pacstrap-style
+./build/test-vm.sh NTUnix.iso    # boot in a UEFI VM (QEMU/OVMF)
+```
 
-## Rodando o runtime isolado (sem ISO)
+`OUT_ISO=` sets the output file, `NTUNIX_EDITIONS="1 6"` limits which image
+editions are processed, `VM_NAME=` and `VIRSH=` point at a different VM. The VM
+debug channel (`make debug-live`) is documented in `docs/canal-debug-vm.md` — dev
+only, unauthenticated.
 
-Sob Wine ou num Windows real — a árvore `out/` é a raiz NTUnix:
+To run the user space without an ISO, under Wine or real Windows, `out/` is the
+NTUnix root:
 
-```bash
+```sh
 wine out/system/bin/initd.exe &
 wine out/system/bin/ntctl.exe list
-wine out/system/bin/ntctl.exe shutdown
 ```
 
-O desktop (`dispd` + `ntwm`) precisa de uma sessão gráfica real; sob Wine ele
-sobe, mas o caminho testado é a VM.
+Runtime knobs: `NTUNIX_ROOT` (tree root, otherwise derived from `\system\bin`),
+`DISPD_BACKEND=gdi|dxgi`, `DISPD_TERM=pty|conpty|scrape|demo`.
 
-### Variáveis de runtime
+## Layout
 
-| Variável | Valores | Efeito |
-|---|---|---|
-| `NTUNIX_ROOT` | caminho | Raiz da árvore. Se ausente, é deduzida subindo a partir de `\system\bin`. |
-| `DISPD_BACKEND` | `gdi` \| `dxgi` | Backend de apresentação. Default `gdi`. |
-| `DISPD_TERM` | `pty` \| `conpty` \| `scrape` \| `demo` | Força o backend de terminal. Default: heurística por cmdline. |
-
-## Layout do repositório
-
-```text
-src/common/         ntu.h, ntuwm.h + ntupath/ntuini/ntuutil — compartilhado
-src/initd/          supervisor (initd.c, service.c, pipesrv.c)
-src/ntctl/          cliente de controle
-src/logd/           coletor central de logs (v0)
-src/demod/          serviço de demonstração
-src/ntsession/      shell da sessão (substitui o explorer.exe)
-src/dispd/          display server + compositor, terminal, protocolo do WM
-src/ntwm/           window manager em tiling (cliente do dispd)
-src/apps/ntclock/   app de demo da fronteira apps↔dispd
-src/ntdbgcon/       reverse shell de debug — aposentado pelo dbgterm do dispd
-musl-nt/            libc musl LP64 para PE + backend NT + toolchain e testes
-third_party/        libvterm (MIT) — engine VT do vim/neovim
-etc/units/          units de exemplo (*.service)
-etc/                passwd, group, hosts, mtab, ntwm/ntwm.conf
-proc/mounts         stub de compatibilidade para o BusyBox (df, mount)
-build/              fetch-deps.sh, make-iso.sh, make-live.sh, autounattend.xml,
-                    SetupComplete.cmd, strip.list, test-vm.sh, vm-setup.sh
-test/               smoke.sh (runtime), build-check.sh (base de build)
-docs/               contratos, guias, auditoria e pesquisa — ver docs/README.md
+```
+src/common/     ntu.h · ntuwm.h · ntupath (path translation) · ntuini · ntuutil
+src/initd/      initd · service · pipesrv        src/ntctl/   control client
+src/logd/       log collector                    src/demod/   demo service
+src/ntsession/  session shell (replaces explorer.exe)
+src/dispd/      compositor · present (gdi/dxgi) · vt · term (pty/conpty/scrape)
+                · input · wmproto (dispd<->wm) · appsrv (apps<->dispd) · foreign
+src/ntwm/       tiling wm: ntwm · proto · layout
+src/apps/       ntclock (demo client of the app surface API)
+musl-nt/        nt/ (the NT backend) · tools/ (LP64->COFF rewrite) · test/
+third_party/    libvterm (MIT) — the VT engine from vim/neovim
+etc/            units/*.service · passwd · group · hosts · mtab · ntwm.conf
+build/          fetch-deps · make-iso · make-live · autounattend.xml · strip.list
+test/           smoke.sh (runtime) · build-check.sh (image base)
+docs/           contracts, audit, research — see docs/README.md
 ```
 
-## Documentação
+Three documents are normative: `docs/VISAO.md` (architecture),
+`docs/PROTOCOLO.md` (the initd control protocol), `docs/musl-nt-spec.md` (libc
+ABI and syscalls). Code that contradicts them is a bug, in one or the other.
 
-Índice completo em **[docs/README.md](docs/README.md)**. Os três contratos:
+## License
 
-- [Visão geral e arquitetura](docs/VISAO.md) — o documento fundador.
-- [Protocolo do initd](docs/PROTOCOLO.md) — pipe de controle, verbos e units.
-- [Especificação da musl-nt](docs/musl-nt-spec.md) — ABI, syscalls e decisões.
+MIT — © Cauã Alvarenga Neves.
 
-Build e uso da libc: [musl-nt/README.md](musl-nt/README.md).
-
-## Licença
-
-Código do NTUnix sob **[MIT](LICENSE)**.
-
-Software de terceiros mantém a licença de origem:
-
-- **libvterm** (MIT) — vendorizada em [`third_party/libvterm`](third_party/libvterm),
-  ver [`third_party/libvterm/LICENSE`](third_party/libvterm/LICENSE).
-- **musl** (MIT) e **BusyBox** (GPL-2.0) — não ficam no repositório; `make deps`
-  baixa as fontes originais. Uma imagem gerada por `make iso`/`make live`
-  **contém o BusyBox**, então redistribuir essa imagem carrega as obrigações da
-  GPL-2.0 (entre elas, oferecer o código-fonte correspondente).
-- **Windows** — nada da Microsoft é redistribuído. A ISO de origem e a licença
-  são suas.
+Third-party code keeps its own: libvterm (MIT) is vendored under `third_party/`;
+musl (MIT) and BusyBox (GPL-2.0) are fetched at build time, never committed. An
+image produced by `make iso` or `make live` contains BusyBox, so redistributing
+that image carries the GPL-2.0 obligations.

@@ -1,55 +1,36 @@
-# Documentação do NTUnix
+# Documentation
 
-## Contratos (normativos)
+## Contracts
 
-Estes descrevem o que o sistema **deve** fazer. Mudança de código que os
-contrarie é bug — no código ou no documento.
+Normative. Code that contradicts these is a bug — in the code or in the
+document.
 
-| Documento | Assunto |
-|---|---|
-| [VISAO.md](VISAO.md) | Visão geral e arquitetura. O documento fundador — comece por aqui. |
-| [PROTOCOLO.md](PROTOCOLO.md) | Protocolo de controle do `initd`: pipe, verbos, formato das units. |
-| [musl-nt-spec.md](musl-nt-spec.md) | ABI da libc: LP64 sobre PE, syscalls do backend NT, decisões e limites. |
+- [`VISAO.md`](VISAO.md) — architecture and the founding design. Start here.
+- [`PROTOCOLO.md`](PROTOCOLO.md) — initd control protocol: pipe, verbs, unit format.
+- [`musl-nt-spec.md`](musl-nt-spec.md) — libc ABI: LP64 over PE, NT syscall backend, limits.
 
-O protocolo `dispd`↔`ntwm` não tem documento próprio; o contrato vive em
-[`src/common/ntuwm.h`](../src/common/ntuwm.h), e a fronteira apps↔dispd em
-`src/dispd/appsrv.c`.
+Two protocols have no document of their own: dispd↔ntwm lives in
+[`src/common/ntuwm.h`](../src/common/ntuwm.h), apps↔dispd in `src/dispd/appsrv.c`.
 
-## Guias
+## Guides
 
-| Documento | Assunto |
-|---|---|
-| [canal-debug-vm.md](canal-debug-vm.md) | Terminal de debug compartilhado da VM (`dbgterm`), via reverse shell TCP. Só dev. |
-| [../musl-nt/README.md](../musl-nt/README.md) | Build, toolchain e testes da musl-nt. |
+- [`canal-debug-vm.md`](canal-debug-vm.md) — the shared VM debug terminal (`dbgterm`), over a TCP reverse shell. Dev only.
+- [`../musl-nt/README.md`](../musl-nt/README.md) — libc build, toolchain, tests.
 
-## Auditoria — [auditoria/](auditoria/)
+## Audit — [`auditoria/`](auditoria/)
 
-Fotografia de um momento, não contrato. Envelhece conforme o código anda.
+A snapshot, not a contract. Ages as the code moves.
 
-| Documento | Assunto |
-|---|---|
-| [auditoria/dispd-ntwm-prompt.md](auditoria/dispd-ntwm-prompt.md) | Manifesto da auditoria do desktop: escopo e método. |
-| [auditoria/dispd-ntwm-relatorio.md](auditoria/dispd-ntwm-relatorio.md) | Relatório completo — os achados numerados que o resto referencia. |
-| [auditoria/arquitetura-debt.md](auditoria/arquitetura-debt.md) | Os achados tipo `ARCH`: dívida deliberada, não bug. |
-| [auditoria/desktop-known-gaps.md](auditoria/desktop-known-gaps.md) | O que o desktop garante e o que reconhecidamente ainda não faz. |
+- [`dispd-ntwm-relatorio.md`](auditoria/dispd-ntwm-relatorio.md) — the full report; the numbered findings everything else cites.
+- [`dispd-ntwm-prompt.md`](auditoria/dispd-ntwm-prompt.md) — scope and method of that audit.
+- [`arquitetura-debt.md`](auditoria/arquitetura-debt.md) — the `ARCH` findings: deliberate debt, not bugs.
+- [`desktop-known-gaps.md`](auditoria/desktop-known-gaps.md) — what the desktop guarantees and what it admits it does not do.
 
-## Pesquisa — [pesquisa/](pesquisa/)
+## Research — [`pesquisa/`](pesquisa/)
 
-Notas de investigação que embasaram as decisões de projeto. Não são
-especificação e não acompanham o código; são o "por quê" por trás dele.
+Investigation notes behind the design decisions. Not specification, and they do
+not track the code — they are the reasoning that preceded it.
 
-- **NT por dentro** — [nt-native-api.md](pesquisa/nt-native-api.md),
-  [nt-boot-install.md](pesquisa/nt-boot-install.md),
-  [nt-win11-image.md](pesquisa/nt-win11-image.md),
-  [nt-dwm-compositor.md](pesquisa/nt-dwm-compositor.md),
-  [comparacao-linux-vs-nt.md](pesquisa/comparacao-linux-vs-nt.md)
-- **Display server e WM** — [deep-wm-architecture.md](pesquisa/deep-wm-architecture.md),
-  [deep-dwm.md](pesquisa/deep-dwm.md),
-  [deep-xorg-server.md](pesquisa/deep-xorg-server.md),
-  [deep-compositors.md](pesquisa/deep-compositors.md),
-  [deep-gfx-server-linux.md](pesquisa/deep-gfx-server-linux.md),
-  [deep-gfx-server-windows.md](pesquisa/deep-gfx-server-windows.md),
-  [wm-compositor-survey.md](pesquisa/wm-compositor-survey.md)
-- **BusyBox sobre a musl-nt** — [busybox-coreutils-musl-deps.md](pesquisa/busybox-coreutils-musl-deps.md)
-  e os três levantamentos `bb-coreutils-*.txt` (funções de libc consumidas,
-  headers públicos e o fecho completo de headers).
+- **NT internals** — `nt-native-api.md`, `nt-boot-install.md`, `nt-win11-image.md`, `nt-dwm-compositor.md`, `comparacao-linux-vs-nt.md`
+- **Display server and WM** — `deep-wm-architecture.md`, `deep-dwm.md`, `deep-xorg-server.md`, `deep-compositors.md`, `deep-gfx-server-linux.md`, `deep-gfx-server-windows.md`, `wm-compositor-survey.md`
+- **BusyBox over musl-nt** — `busybox-coreutils-musl-deps.md` plus the three `bb-coreutils-*.txt` surveys (libc functions consumed, public headers, full header closure)
