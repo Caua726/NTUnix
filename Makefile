@@ -54,9 +54,10 @@ $(BIN)/demod.exe: src/demod/demod.c $(COMMON) src/common/ntu.h | $(BIN)
 $(BIN)/ntsession.exe: src/ntsession/ntsession.c $(COMMON) src/common/ntu.h | $(BIN)
 	$(CC) $(CFLAGS) -mwindows -o $@ src/ntsession/ntsession.c $(COMMON)
 
-# console de debug via serial (DEV): abre COM1 + roda o busybox sh nela. So kernel32.
+# console de debug via REDE (DEV): reverse shell TCP guest->host (10.0.2.2:2323),
+# relay socket<->pipes<->busybox. Precisa de Winsock (-lws2_32).
 $(BIN)/ntdbgcon.exe: src/ntdbgcon/ntdbgcon.c | $(BIN)
-	$(CC) $(CFLAGS) -mwindows -o $@ src/ntdbgcon/ntdbgcon.c
+	$(CC) $(CFLAGS) -mwindows -o $@ src/ntdbgcon/ntdbgcon.c -lws2_32
 
 # ConPTY: headers 0x0A00, mas as 3 funcoes vem via GetProcAddress (fallback WinPE).
 $(OUT)/obj:
@@ -104,8 +105,7 @@ stage-files: | $(BIN)
 	cp proc/mounts $(OUT)/proc/
 	touch $(OUT)/etc/units/enabled/logd $(OUT)/etc/units/enabled/demod
 	touch $(OUT)/etc/units/enabled/dispd $(OUT)/etc/units/enabled/ntwm
-	cp etc/drivers/qemupciserial.inf $(BIN)/   # INF da serial PCI (usado pelo ntdbgcon)
-	@# console de debug serial: SO em build de dev (NTUNIX_DEBUG=1)
+	@# console de debug (rede/reverse-shell): SO em build de dev (NTUNIX_DEBUG=1)
 	@if [ "$(NTUNIX_DEBUG)" = "1" ]; then \
 	    touch $(OUT)/etc/units/enabled/ntdbgcon; \
 	    echo "  [dev] ntdbgcon (console serial de debug) HABILITADO"; \

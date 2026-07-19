@@ -21,16 +21,11 @@ mkdir -p "$REPO/build/vm"
 # disco de 40G (nao usado pelo live, mas pronto pro instalador futuro)
 [ -f "$DISK" ] || qemu-img create -f qcow2 "$DISK" 40G >/dev/null
 
-# canal de debug serial (DEV): NTUNIX_DEBUG=1 liga uma serial PCI do guest a um
-# socket TCP do host, pra conectar num shell da NTUnix sem depender da rede da VM.
-# PCI (nao ISA) porque o WinPE UEFI so enumera a serial via PCI de forma confiavel
-# (a ISA nao aparece — sem NTDETECT.COM no boot UEFI). So em dev.
-SERIAL_ARGS=()
-DBGPORT="${NTUNIX_DBG_PORT:-4555}"
-if [ "${NTUNIX_DEBUG:-}" = "1" ]; then
-    # addr=0x08: slot PCI livre no bus 0 (0x01/02/03/1f ja usados por video/root-ports/lpc)
-    SERIAL_ARGS=(--qemu-commandline="-chardev socket,id=dbgser,host=127.0.0.1,port=${DBGPORT},server=on,wait=off -device pci-serial,chardev=dbgser,addr=0x08")
-fi
+# canal de debug via REDE (DEV): a NIC e1000e (--network user, driver inbox do WinPE)
+# ja da 10.0.2.15 ao guest, com o host em 10.0.2.2 (gateway do SLIRP). O ntdbgcon
+# faz reverse-connect pra 10.0.2.2:2323, entao NAO precisa de hostfwd nem de nenhum
+# qemu:commandline — o SLIRP encaminha guest->10.0.2.2 pro host. So em dev.
+DBGPORT="${NTUNIX_DBG_PORT:-2323}"
 
 # idempotente: destrói e redefine a VM
 virsh -c "$CONN" destroy  "$NAME" 2>/dev/null || true
@@ -48,15 +43,14 @@ virt-install \
     --graphics spice \
     --video qxl \
     --sound none \
-    --network user \
-    "${SERIAL_ARGS[@]}" \
+    --network user,model=e1000e \
     --noautoconsole
 
 if [ "${NTUNIX_DEBUG:-}" = "1" ]; then
     echo
-    echo "[dev] console serial de debug ligado na COM1 -> TCP 127.0.0.1:${DBGPORT}"
-    echo "      quando a VM bootar, conecte com:  nc 127.0.0.1 ${DBGPORT}"
-    echo "      (ou: socat -,raw,echo=0 TCP:127.0.0.1:${DBGPORT})"
+    echo "[dev] canal de debug via rede (reverse shell). Quando a VM bootar, escute no host:"
+    echo "      nc -lv 127.0.0.1 ${DBGPORT}"
+    echo "      o guest conecta em 10.0.2.2:${DBGPORT} e cai num shell da NTUnix."
 fi
 
 echo
