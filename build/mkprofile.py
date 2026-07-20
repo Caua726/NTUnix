@@ -216,16 +216,47 @@ def main():
         if len(wl) < 500:
             sys.exit(f'whitelist do WinPE suspeita: so {len(wl)} nomes')
 
-    caminho = None
-    vistos, apagados, bytes_out = set(), 0, 0
+    # DUAS passagens, e a segunda existe por um motivo caro: a remocao e'
+    # `delete --recursive`, entao emitir um DIRETORIO apaga tudo que ha dentro.
+    # Um diretorio nunca esta na whitelist (ela so' tem nomes de arquivo), logo
+    # /Windows/System32/config caia como removivel e levava junto SOFTWARE e
+    # SYSTEM, que a regra logo acima manda preservar. Resultado: instalacao sem
+    # registro. Nenhum caminho pode ser emitido se for ancestral de algo mantido.
+    manter, candidatos = set(), []
     for linha in sys.stdin:
-        if linha.startswith('Full Path'):
-            caminho = linha.split('= ', 1)[1].strip().strip('"')
-            if caminho and caminho not in vistos and remove(caminho, cfg, wl):
-                vistos.add(caminho)
-                apagados += 1
-                print("delete --force --recursive '%s'" % caminho.replace('/', '\\'))
-    print(f'# perfil {perfil}: {apagados} caminhos removidos', file=sys.stderr)
+        if not linha.startswith('Full Path'):
+            continue
+        caminho = linha.split('= ', 1)[1].strip().strip('"')
+        if not caminho or caminho == '/':
+            continue
+        if remove(caminho, cfg, wl):
+            candidatos.append(caminho)
+        else:
+            manter.add(caminho)
+
+    # ancestrais de qualquer caminho mantido: intocaveis
+    protegidos = set()
+    for p in manter:
+        partes = p.strip('/').split('/')
+        for i in range(1, len(partes)):
+            protegidos.add('/' + '/'.join(partes[:i]))
+
+    # Ordenar por profundidade garante que o pai seja decidido antes do filho;
+    # a checagem de ancestral vira consulta em conjunto (O(profundidade)) em vez
+    # de varrer os ja emitidos, que sobre ~100k caminhos era quadratico.
+    emitidos, pulados = set(), 0
+    for p in sorted(candidatos, key=lambda x: (x.count('/'), x)):
+        if p in protegidos:
+            pulados += 1
+            continue
+        partes = p.strip('/').split('/')
+        if any('/' + '/'.join(partes[:i]) in emitidos for i in range(1, len(partes))):
+            continue                      # pai ja removido; comando redundante
+        emitidos.add(p)
+        print("delete --force --recursive '%s'" % p.replace('/', '\\'))
+    print(f'# perfil {perfil}: {len(emitidos)} remocoes '
+          f'({pulados} diretorios preservados por conterem arquivos mantidos)',
+          file=sys.stderr)
 
 
 if __name__ == '__main__':
