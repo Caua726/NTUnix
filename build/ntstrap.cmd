@@ -1,9 +1,10 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 rem ============================================================================
-rem ntstrap - o instalador do NTUnix. Roda DENTRO do ambiente live (WinPE).
+rem ntstrap - o instalador do NTUnix. Roda DENTRO do ambiente live.
 rem
-rem   ntstrap [disco] [perfil]      ex.: ntstrap 0 leve
+rem   ntstrap                 menu guiado (padrao)
+rem   ntstrap <disco> <perfil>  direto, sem menu:  ntstrap 0 leve
 rem
 rem Faz o que o pacstrap faz: particiona, aplica o sistema base num diretorio e
 rem torna aquilo bootavel. O Setup da Microsoft NAO participa - por isso nao ha
@@ -19,18 +20,13 @@ rem e perde diskpart, dism, reg e bcdboot de uma vez so'.
 set PATH=%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\Wbem
 
 set DISK=%~1
-set INDEX=%~2
-if "%DISK%"=="" set DISK=0
+set PERFIL=%~2
 set EFI=S:
 set TGT=W:
 rem A arvore do NTUnix vem do proprio ambiente live: ela esta dentro do
 rem boot.wim, montado em X:. So o install.wim e' grande demais e fica na midia.
 set NTU=%SYSTEMDRIVE%\NTUnix
 set INST=%NTU%\install
-
-echo.
-echo   ntstrap - instalador do NTUnix
-echo   ------------------------------
 
 rem --- 1. achar a midia (a letra do CD varia; procuramos o install.wim) ------
 set SRC=
@@ -39,42 +35,102 @@ for %%D in (D E F G H I J K L M N O P Q R T U V Y Z) do (
 )
 if not defined SRC (
     echo   erro: nao achei \sources\install.wim em nenhuma unidade.
-    echo         a midia live precisa ser gerada com NTUNIX_INSTALLER=1.
     exit /b 1
 )
-rem Base do sistema. Hoje o install.wim, ja enxugado no host pelo make-live.
-rem NTU_BASE permite apontar outra: o boot.wim (WinPE persistente) e o proximo
-rem perfil, bem menor, e o ambiente live ja prova que ele roda o desktop.
 if "%NTU_BASE%"=="" set NTU_BASE=%SRC%\sources\install.wim
 set BASE=%NTU_BASE%
-echo   base:    %BASE%
 
-rem --- 2. escolher o PERFIL -------------------------------------------------
-rem A midia traz os tres como imagens do mesmo wim. Tamanhos medidos sobre um
-rem Windows 11 Pro; ver docs/perfis.md.
-if /I "%INDEX%"=="normal" set INDEX=1
-if /I "%INDEX%"=="leve"   set INDEX=2
-if /I "%INDEX%"=="debug"  set INDEX=3
+rem se vieram os dois argumentos, pula o menu
+if not "%DISK%"=="" if not "%PERFIL%"=="" goto :resolve
+if "%DISK%"=="" set DISK=0
+if "%PERFIL%"=="" set PERFIL=leve
+
+rem ============================ MENU GUIADO ==================================
+:menu
+cls
+echo.
+echo    ntstrap - instalador do NTUnix
+echo    ==============================
+echo.
+echo      midia:  %BASE%
+echo.
+echo      1^)  Disco de destino .... %DISK%
+echo      2^)  Perfil ............... %PERFIL%
+echo.
+echo      i^)  Instalar
+echo      q^)  Sair
+echo.
+set OPC=
+set /p OPC=   escolha: 
+if /I "%OPC%"=="1" goto :escolhe_disco
+if /I "%OPC%"=="2" goto :escolhe_perfil
+if /I "%OPC%"=="i" goto :resolve
+if /I "%OPC%"=="q" exit /b 1
+goto :menu
+
+:escolhe_disco
+cls
+echo.
+echo    Discos disponiveis
+echo    ------------------
+echo list disk > "%TEMP%\ld.txt"
+diskpart /s "%TEMP%\ld.txt" | findstr /R /C:"Disco" /C:"Disk"
+echo.
+set /p DISK=   numero do disco [%DISK%]: 
+if "%DISK%"=="" set DISK=0
+goto :menu
+
+:escolhe_perfil
+cls
+echo.
+echo    Perfil de instalacao
+echo    --------------------
+echo.
+echo      1^)  normal    ~4.8 GB    .NET, 32 bits e drivers completos.
+echo                                Compatibilidade maxima com apps Win32.
+echo.
+echo      2^)  leve      ~3.0 GB    Sem .NET nem 32 bits. Ainda instala em
+echo                                hardware real; navegadores funcionam.
+echo.
+echo      3^)  debug     ~670 MB    SO PARA MAQUINA VIRTUAL. Base minima:
+echo                                nosso user space + navegador. Drivers
+echo                                so' de VM - nao boota em metal.
+echo.
+set OPC=
+set /p OPC=   perfil [1/2/3]: 
+if "%OPC%"=="1" set PERFIL=normal
+if "%OPC%"=="2" set PERFIL=leve
+if "%OPC%"=="3" set PERFIL=debug
+goto :menu
+
+rem ====================== resolucao e confirmacao ============================
+:resolve
+set INDEX=
+if /I "%PERFIL%"=="normal" set INDEX=1
+if /I "%PERFIL%"=="leve"   set INDEX=2
+if /I "%PERFIL%"=="debug"  set INDEX=3
+if /I "%PERFIL%"=="1" set INDEX=1& set PERFIL=normal
+if /I "%PERFIL%"=="2" set INDEX=2& set PERFIL=leve
+if /I "%PERFIL%"=="3" set INDEX=3& set PERFIL=debug
 if "%INDEX%"=="" (
-    echo.
-    echo     1  normal   ~4.8 GB   .NET, 32 bits e drivers completos
-    echo     2  leve     ~3.0 GB   sem .NET nem 32 bits
-    echo     3  debug    ~670 MB   SO PARA VM: base minima + navegador
-    echo.
-    set /p INDEX=  perfil ^(1/2/3 ou normal/leve/debug^):
-)
-if /I "%INDEX%"=="normal" set INDEX=1
-if /I "%INDEX%"=="leve"   set INDEX=2
-if /I "%INDEX%"=="debug"  set INDEX=3
-if "%INDEX%"=="" (
-    echo   erro: nenhum perfil escolhido.
+    echo   erro: perfil desconhecido '%PERFIL%' ^(use normal, leve ou debug^).
     exit /b 1
 )
 
-echo   disco:   %DISK%   ^(SERA APAGADO POR COMPLETO^)
-echo   perfil:  imagem %INDEX%
+cls
 echo.
-set /p OK=  digite SIM para continuar:
+echo    Resumo
+echo    ------
+echo.
+echo      disco   %DISK%      SERA APAGADO POR COMPLETO
+echo      perfil  %PERFIL% ^(imagem %INDEX%^)
+echo      base    %BASE%
+echo.
+echo      Layout: ESP 300MB FAT32 + MSR 16MB + NTFS no resto
+echo      O shell da sessao sera o ntsession, escrito no hive antes do 1o boot.
+echo.
+set OK=
+set /p OK=   digite SIM para instalar: 
 if /I not "%OK%"=="SIM" (
     echo   cancelado.
     exit /b 1
