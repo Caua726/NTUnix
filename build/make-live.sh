@@ -103,6 +103,11 @@ if [ "${NTUNIX_INSTALLER:-}" = 1 ]; then
         wimlib-imagex update "$IW" "$idx" < "$CMDS" >/dev/null
     done
     rm -f "$BASE"
+    # o wimlib escreve num temporario e renomeia; nas atualizacoes em sequencia
+    # sobram arquivos install.wimXXXXXXXX, que iam parar dentro da ISO (340MB
+    # de lixo na ultima medicao). Nao existe opcao para desligar isso.
+    find "$IMG/sources" -maxdepth 1 -name 'install.wim?*' -delete 2>/dev/null || true
+    find "$IMG/sources" -maxdepth 1 -name 'boot.wim?*' -delete 2>/dev/null || true
     wimlib-imagex info "$IW" | grep -E '^(Index|Name):' || true
 
     # o delete nao encolhe o wim sozinho: os recursos so somem no rebuild
