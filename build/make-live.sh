@@ -53,6 +53,63 @@ if [ "${NTUNIX_INSTALLER:-}" = 1 ]; then
         rm -f "$IMG/sources/install.esd"
     fi
     [ -f "$IMG/sources/install.wim" ] || die "sources/install.wim ausente na ISO"
+
+    # --- enxugar a imagem ANTES de ela ir pra midia ------------------------
+    # Duas reducoes, nesta ordem:
+    #   1. exportar SO a edicao escolhida (a ISO da MS traz 6);
+    #   2. apagar o peso morto listado em strip.list, dentro do wim.
+    # Fazer isso aqui, e nao depois de aplicar, e' o que faz a instalacao
+    # NASCER pequena: o dism nunca chega a expandir os GB que iriam fora.
+    IW="$IMG/sources/install.wim"
+    ed_name() { wimlib-imagex info "$IW" "$1" \
+        | sed -n 's/^Name:[[:space:]]*//p' | head -1 | sed 's/[[:space:]]*$//'; }
+    IDXS="$(wimlib-imagex info "$IW" | awk '/^Index:/{print $NF}')"
+    KEEP=""
+    if [ -n "${NTUNIX_EDITION:-}" ]; then
+        for i in $IDXS; do [ "$(ed_name "$i")" = "$NTUNIX_EDITION" ] && KEEP="$i"; done
+        [ -n "$KEEP" ] || die "edicao '$NTUNIX_EDITION' nao existe nesta ISO"
+    else
+        for i in $IDXS; do case "$(ed_name "$i")" in *" Pro") KEEP="$i"; break ;; esac; done
+        [ -n "$KEEP" ] || KEEP="$(echo $IDXS | awk '{print $1}')"
+    fi
+    step "edicao base: $(ed_name "$KEEP") (indice $KEEP de $(echo $IDXS | wc -w))"
+
+    before=$(du -m "$IW" | cut -f1)
+    wimlib-imagex export "$IW" "$KEEP" "$IW.one" --boot --compress=LZX >/dev/null
+    mv "$IW.one" "$IW"
+
+    # --- os TRES perfis, como tres imagens no MESMO wim ------------------
+    # O WIM armazena por hash: como debug e' subconjunto de leve, que e' de
+    # normal, as duas menores quase nao custam espaco. Uma ISO so' (~2G) instala
+    # qualquer um dos tres. Aplicar-e-depois-apagar nao serviria: exigiria os
+    # 13G da imagem cheia em disco antes de encolher, e o disco alvo tem 10G.
+    #   1 normal ~4,8G · 2 leve ~3,0G · 3 debug ~670MB   (ver docs/perfis.md)
+    BASE="$IW.base"; mv "$IW" "$BASE"
+    PELIST="$WORK/winpe-files.tsv"
+    wimlib-imagex dir "$WIM" 1 --detailed 2>/dev/null \
+        | python3 "$REPO/build/dumpwim.py" > "$PELIST"
+
+    idx=0
+    for perfil in normal leve debug; do
+        idx=$((idx+1))
+        step "perfil $idx/3: $perfil"
+        wimlib-imagex export "$BASE" 1 "$IW" \
+            --image-name "NTUnix $perfil" --compress=LZX >/dev/null
+        CMDS="$WORK/perfil-$perfil.txt"
+        wimlib-imagex dir "$IW" "$idx" --detailed 2>/dev/null \
+            | python3 "$REPO/build/mkprofile.py" "$perfil" "$PELIST" > "$CMDS"
+        step "  $(grep -c . "$CMDS") remocoes"
+        wimlib-imagex update "$IW" "$idx" < "$CMDS" >/dev/null
+    done
+    rm -f "$BASE"
+    wimlib-imagex info "$IW" | grep -E '^(Index|Name):' || true
+
+    # o delete nao encolhe o wim sozinho: os recursos so somem no rebuild
+    step "recomprimindo o wim (solid)"
+    wimlib-imagex optimize "$IW" --solid --recompress >/dev/null 2>&1 \
+        || wimlib-imagex optimize "$IW" --recompress >/dev/null
+    after=$(du -m "$IW" | cut -f1)
+    step "install.wim: ${before}MB -> ${after}MB"
 else
     step "extraindo $SRC_ISO (sem install.wim — so live)"
     7z x -y -o"$IMG" "$SRC_ISO" -x'!sources/install.wim' -x'!sources/install.esd' >/dev/null

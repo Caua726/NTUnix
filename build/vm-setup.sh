@@ -23,7 +23,7 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 CONN="qemu:///session"
 NAME="${VM_NAME:-ntunix}"
 DISK="$REPO/build/vm/ntunix.qcow2"
-DISK_SIZE="${NTUNIX_DISK_SIZE:-40G}"
+DISK_SIZE="${NTUNIX_DISK_SIZE:-10G}"
 # O instalador do Win11 quer folga; o sistema instalado roda bem com menos.
 RAM="${NTUNIX_VM_RAM:-2048}"
 RAM_INSTALL="${NTUNIX_VM_RAM_INSTALL:-4096}"
@@ -69,6 +69,12 @@ QEMU_NET="-netdev user,id=ntu0,smb=$SHARE,smbserver=10.0.2.4"
 QEMU_NET="$QEMU_NET -device pcie-root-port,id=ntuport,bus=pcie.0,addr=0x10"
 QEMU_NET="$QEMU_NET -device e1000e,netdev=ntu0,bus=ntuport"
 
+# DISCO EM SATA, nao virtio: o WinPE nao traz driver virtio-blk inbox, entao um
+# disco virtio fica INVISIVEL pro instalador ("nao ha discos fixos para mostrar").
+# SATA/AHCI e' inbox e funciona de imediato. Para usar virtio seria preciso
+# injetar os drivers virtio-win no boot.wim antes.
+DISKBUS="${NTUNIX_DISK_BUS:-sata}"
+
 # o instalador precisa de folga; depois de instalado, o modo run usa menos
 if [ "$MODE" = install ]; then RAM="$RAM_INSTALL"; fi
 
@@ -95,7 +101,7 @@ install)
     [ -f "$ISO" ] || die "ISO instalavel nao encontrada: $ISO — rode 'make iso' antes"
     step "bootando a midia instalavel $ISO"
     virt-install "${common_args[@]}" \
-        --disk path="$DISK",bus=virtio,boot.order=2 \
+        --disk path="$DISK",bus=$DISKBUS,boot.order=2 \
         --disk path="$ISO",device=cdrom,bus=sata,boot.order=1
     cat <<'EOM'
 
@@ -118,7 +124,7 @@ run)
         || die "o disco parece vazio — rode './build/vm-setup.sh install' primeiro"
     step "boot do disco, share SMB de $SHARE"
     virt-install "${common_args[@]}" \
-        --disk path="$DISK",bus=virtio,boot.order=1 \
+        --disk path="$DISK",bus=$DISKBUS,boot.order=1 \
         --import
     ;;
 live)
@@ -126,7 +132,7 @@ live)
     [ -f "$ISO" ] || die "ISO live nao encontrada: $ISO — rode 'make live' antes"
     step "boot da ISO live (WinPE na RAM; usa mais RAM que o modo instalado)"
     virt-install "${common_args[@]}" \
-        --disk path="$DISK",bus=virtio,boot.order=2 \
+        --disk path="$DISK",bus=$DISKBUS,boot.order=2 \
         --disk path="$ISO",device=cdrom,bus=sata,boot.order=1
     ;;
 *)

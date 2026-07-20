@@ -3,7 +3,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 rem ============================================================================
 rem ntstrap - o instalador do NTUnix. Roda DENTRO do ambiente live (WinPE).
 rem
-rem   ntstrap [disco] [indice]      ex.: ntstrap 0 4
+rem   ntstrap [disco] [perfil]      ex.: ntstrap 0 leve
 rem
 rem Faz o que o pacstrap faz: particiona, aplica o sistema base num diretorio e
 rem torna aquilo bootavel. O Setup da Microsoft NAO participa - por isso nao ha
@@ -42,22 +42,37 @@ if not defined SRC (
     echo         a midia live precisa ser gerada com NTUNIX_INSTALLER=1.
     exit /b 1
 )
-echo   midia:   %SRC%\sources\install.wim
+rem Base do sistema. Hoje o install.wim, ja enxugado no host pelo make-live.
+rem NTU_BASE permite apontar outra: o boot.wim (WinPE persistente) e o proximo
+rem perfil, bem menor, e o ambiente live ja prova que ele roda o desktop.
+if "%NTU_BASE%"=="" set NTU_BASE=%SRC%\sources\install.wim
+set BASE=%NTU_BASE%
+echo   base:    %BASE%
 
-rem --- 2. escolher a edicao -------------------------------------------------
+rem --- 2. escolher o PERFIL -------------------------------------------------
+rem A midia traz os tres como imagens do mesmo wim. Tamanhos medidos sobre um
+rem Windows 11 Pro; ver docs/perfis.md.
+if /I "%INDEX%"=="normal" set INDEX=1
+if /I "%INDEX%"=="leve"   set INDEX=2
+if /I "%INDEX%"=="debug"  set INDEX=3
 if "%INDEX%"=="" (
     echo.
-    dism /Get-ImageInfo /ImageFile:"%SRC%\sources\install.wim"
+    echo     1  normal   ~4.8 GB   .NET, 32 bits e drivers completos
+    echo     2  leve     ~3.0 GB   sem .NET nem 32 bits
+    echo     3  debug    ~670 MB   SO PARA VM: base minima + navegador
     echo.
-    set /p INDEX=  indice da edicao a instalar:
+    set /p INDEX=  perfil ^(1/2/3 ou normal/leve/debug^):
 )
+if /I "%INDEX%"=="normal" set INDEX=1
+if /I "%INDEX%"=="leve"   set INDEX=2
+if /I "%INDEX%"=="debug"  set INDEX=3
 if "%INDEX%"=="" (
-    echo   erro: nenhum indice escolhido.
+    echo   erro: nenhum perfil escolhido.
     exit /b 1
 )
 
 echo   disco:   %DISK%   ^(SERA APAGADO POR COMPLETO^)
-echo   edicao:  indice %INDEX%
+echo   perfil:  imagem %INDEX%
 echo.
 set /p OK=  digite SIM para continuar:
 if /I not "%OK%"=="SIM" (
@@ -89,7 +104,10 @@ diskpart /s "%TEMP%\ntstrap-disk.txt" || (
 rem --- 4. aplicar o sistema base (o "pacstrap") -----------------------------
 echo.
 echo   ==^> aplicando a imagem em %TGT% ^(demora^)
-dism /Apply-Image /ImageFile:"%SRC%\sources\install.wim" /Index:%INDEX% /ApplyDir:%TGT%\ || (
+rem /ScratchDir no destino: sem isso o dism usa o ramdisk do WinPE como area
+rem temporaria e estoura ("nao ha recursos de memoria suficientes", erro 8).
+if not exist "%TGT%\ntu-scratch" mkdir "%TGT%\ntu-scratch"
+dism /Apply-Image /ImageFile:"%BASE%" /Index:%INDEX% /ApplyDir:%TGT%\ /ScratchDir:%TGT%\ntu-scratch || (
     echo   erro: dism /Apply-Image falhou.
     exit /b 1
 )
@@ -169,6 +187,7 @@ if exist "%INST%\unattend-oobe.xml" (
 )
 
 rem --- 9. tornar bootavel ---------------------------------------------------
+if exist "%TGT%\ntu-scratch" rd /s /q "%TGT%\ntu-scratch" 2>nul
 echo   ==^> instalando o bootloader ^(UEFI^)
 bcdboot %TGT%\Windows /s %EFI% /f UEFI || (
     echo   erro: bcdboot falhou.

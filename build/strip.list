@@ -1,5 +1,7 @@
-# strip.list — caminhos DENTRO da imagem (install.wim) apagados pelo
-# make-iso.sh via `wimlib-imagex update` (delete --force --recursive).
+# strip.list — caminhos DENTRO da imagem apagados pelo make-live.sh via
+# `wimlib-imagex update` (delete --force --recursive), ANTES de a imagem ir
+# pra midia. Stripar no wim, e nao depois de aplicar, e' o que faz a
+# instalacao nascer pequena em vez de encolher depois.
 #
 # Linhas com # e vazias sao ignoradas. --force faz caminhos inexistentes
 # (variam por versao de Windows) nao serem erro.
@@ -29,7 +31,40 @@
 /Windows/Web/touchkeyboard
 /Windows/Web/Screen
 
+# --- peso morto para o NTUnix -------------------------------------------
+# Nosso shell e' o ntsession: nada abaixo participa de bootar o kernel NT,
+# carregar drivers ou rodar o nosso user space.
+
+# reconhecimento de fala e sintese de voz
+/Windows/Speech
+/Windows/Speech_OneCore
+
+# sons do sistema e temas
+/Windows/Media
+/Windows/Resources/Themes/aero.theme
+/Windows/Web/4K
+
+# ajuda e amostras
+/Windows/Help
+/Windows/System32/Speech
+
+# IME de CJK (varias centenas de MB); volte a incluir se precisar digitar
+# chines/japones/coreano no console
+/Windows/IME
+
+# ambiente de recuperacao: ~500MB de um winre.wim que nao usamos — o nosso
+# caminho de recuperacao e' rebootar a midia do NTUnix
+/Windows/System32/Recovery/Winre.wim
+
+# demos e wallpapers restantes
+/Windows/Web/Wallpaper/Windows
+
 # NAO remover (aprendido a duras penas em projetos tiny*):
 #  - /Windows/SystemApps  → LogonUI/CBS quebram o logon
 #  - WebView2             → varios instaladores Win32 exigem
 #  - Defender             → remocao offline corrompe servicing
+#  - /Windows/WinSxS      → e' o maior item da imagem, mas remove-lo quebra
+#                           CBS/servicing e o boot fica instavel; a reducao
+#                           real dele exige DISM /Cleanup-Image online
+#  - DriverStore/FileRepository → tentador (GBs), mas cortar as-cegas tira o
+#                           driver do disco/rede e a maquina nao boota

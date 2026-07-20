@@ -159,6 +159,11 @@ debug-live:
 # aplica a imagem com DISM, configura os hives offline e chama o bcdboot. O Setup
 # da Microsoft nao participa: e' por isso que nao ha tela de idioma, chave nem OOBE
 # decidindo nada. Mesma relacao que a ISO do Arch tem com o pacstrap.
+# A ISO traz os TRES perfis como imagens do mesmo wim (o conteudo comum e'
+# armazenado uma vez so'), e o ntstrap pergunta qual instalar:
+#   normal  ~4,8G instalado    .NET, 32 bits e drivers completos
+#   leve    ~3,0G instalado    sem .NET nem 32 bits
+#   debug    ~670MB            so' VM: base minima + navegador
 #   make iso [WIN_ISO=/caminho/Win11.iso] [OUT_ISO=NTUnix.iso]
 iso:
 	@test -f "$(WIN_ISO)" || { echo "ISO do Windows nao encontrada: $(WIN_ISO)"; \

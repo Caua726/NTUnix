@@ -48,3 +48,9 @@ compile_commands.json
 Thumbs.db
 .idea/
 .vscode/
+
+# analise de imagem: dumps grandes e scripts descartaveis (build/mkprofile.py e
+# build/dumpwim.py sao codigo de verdade e ficam rastreados)
+build/analysis/
+__pycache__/
+*.pyc
