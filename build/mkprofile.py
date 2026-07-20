@@ -124,7 +124,13 @@ def mantem_debug(q, f, wl):
     if q.startswith('/windows/system32/'):
         resto = q[len('/windows/system32/'):]
         if resto.startswith('drivers/'):
-            return f.endswith('.sys') and any(d in f for d in DRV_VM)
+            # TODOS os .sys ficam. Filtrar por nome custou o boot: a lista de
+            # drivers carregados na inicializacao passa de 60 e inclui coisas
+            # que nao parecem driver de dispositivo -- CI.dll, clfs, Wdf01000,
+            # mountmgr, CLASSPNP, msfs, npfs, Fs_Rec, ksecpkg. Errar um so' da'
+            # 0xc0430001 no boot, sem dizer qual. Manter tudo custa ~105MB e
+            # cabe no orcamento; adivinhar a lista exata nao vale o risco.
+            return f.endswith('.sys')
         if resto.startswith('driverstore/filerepository/'):
             return any(d in q.split('/filerepository/')[1][:24] for d in DRV_VM)
         if resto.startswith('config/'):     # hives; COMPONENTS e logs saem no COMUM
@@ -158,8 +164,14 @@ def remove(p, cfg, wl):
         return True
 
     if cfg.get('whitelist'):
-        if f in AVULSOS or any(f.startswith(CATS[c]) for c in cfg['cats']):
-            return True
+        # drivers escapam do filtro por CATEGORIA. Ele casa por prefixo de nome,
+        # e varios drivers comecam com prefixos de categoria: spaceport (refs),
+        # bth* (sensor), wlan* (wifi), rdp* e vss*. Um driver marcado como
+        # boot-start no hive e ausente em disco da' 0xc0430001 na inicializacao,
+        # sem dizer qual faltou.
+        if not q.startswith('/windows/system32/drivers/'):
+            if f in AVULSOS or any(f.startswith(CATS[c]) for c in cfg['cats']):
+                return True
         return not mantem_debug(q, f, wl)
 
     if q.startswith('/windows/winsxs/'):

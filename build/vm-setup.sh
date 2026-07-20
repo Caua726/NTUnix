@@ -120,8 +120,11 @@ instala o bootloader. Terminado, desligue e passe pro modo de disco:
 EOM
     ;;
 run)
-    [ "$(qemu-img info --output=json "$DISK" | grep -o '"actual-size": [0-9]*' | grep -o '[0-9]*')" -gt 104857600 ] \
-        || die "o disco parece vazio — rode './build/vm-setup.sh install' primeiro"
+    # tamanho REAL ocupado pelo qcow2. Antes isto usava grep -o '[0-9]*', que
+    # casa string vazia e devolvia varias linhas, quebrando a comparacao.
+    usado=$(du -m "$DISK" 2>/dev/null | cut -f1)
+    [ "${usado:-0}" -gt 100 ] \
+        || die "o disco parece vazio (${usado:-0}MB) — rode './build/vm-setup.sh install' primeiro"
     step "boot do disco, share SMB de $SHARE"
     virt-install "${common_args[@]}" \
         --disk path="$DISK",bus=$DISKBUS,boot.order=1 \
