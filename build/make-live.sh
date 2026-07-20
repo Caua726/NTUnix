@@ -166,8 +166,12 @@ for path in '\Windows\SysWOW64' '\Windows\Speech' '\Windows\Speech_OneCore' \
         >/dev/null 2>&1 || true
 done
 antes=$(du -m "$WIM" | cut -f1)
-wimlib-imagex optimize "$WIM" --solid --solid-chunk-size=64M --recompress >/dev/null 2>&1 \
-    || wimlib-imagex optimize "$WIM" --recompress >/dev/null 2>&1 || true
+# LZX, NAO solid. O Boot Manager le o boot.wim antes de existir sistema, e o
+# leitor de WIM dele nao suporta recursos LZMS/solid -- o boot morre em
+# winload.efi com 0xc00000bb. E' por isso que a MS distribui install.esd solid
+# mas mantem o boot.wim em LZX. O install.wim pode ser solid porque quem o le
+# e' o dism, ja dentro do WinPE carregado.
+wimlib-imagex optimize "$WIM" --compress=LZX --recompress >/dev/null 2>&1 || true
 step "boot.wim: ${antes}MB -> $(du -m "$WIM" | cut -f1)MB"
 
 # --- 5. remover a experiencia de instalacao da midia -----------------------
