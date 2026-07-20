@@ -93,8 +93,9 @@ if [ "${NTUNIX_INSTALLER:-}" = 1 ]; then
     for perfil in normal leve debug; do
         idx=$((idx+1))
         step "perfil $idx/3: $perfil"
-        wimlib-imagex export "$BASE" 1 "$IW" \
-            --image-name "NTUnix $perfil" --compress=LZX >/dev/null
+        # o nome da imagem e' POSICIONAL no wimlib (nao existe --image-name)
+        wimlib-imagex export "$BASE" 1 "$IW" "NTUnix $perfil" \
+            --compress=LZX >/dev/null
         CMDS="$WORK/perfil-$perfil.txt"
         wimlib-imagex dir "$IW" "$idx" --detailed 2>/dev/null \
             | python3 "$REPO/build/mkprofile.py" "$perfil" "$PELIST" > "$CMDS"
