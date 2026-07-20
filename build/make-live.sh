@@ -109,7 +109,7 @@ if [ "${NTUNIX_INSTALLER:-}" = 1 ]; then
     step "recomprimindo o wim (solid)"
     # LZMS solid com chunk grande: medido 3,3:1 contra 2,3:1 do LZX padrao.
     # O dism aplica solid normalmente (e' o mesmo formato dos .esd do Setup).
-    wimlib-imagex optimize "$IW" --solid --solid-chunk-size=256M --recompress >/dev/null 2>&1 \
+    wimlib-imagex optimize "$IW" --solid --solid-chunk-size=64M --recompress >/dev/null 2>&1 \
         || wimlib-imagex optimize "$IW" --solid --recompress >/dev/null 2>&1 \
         || wimlib-imagex optimize "$IW" --recompress >/dev/null
     after=$(du -m "$IW" | cut -f1)
@@ -166,13 +166,26 @@ for path in '\Windows\SysWOW64' '\Windows\Speech' '\Windows\Speech_OneCore' \
         >/dev/null 2>&1 || true
 done
 antes=$(du -m "$WIM" | cut -f1)
-wimlib-imagex optimize "$WIM" --solid --solid-chunk-size=256M --recompress >/dev/null 2>&1 \
+wimlib-imagex optimize "$WIM" --solid --solid-chunk-size=64M --recompress >/dev/null 2>&1 \
     || wimlib-imagex optimize "$WIM" --recompress >/dev/null 2>&1 || true
 step "boot.wim: ${antes}MB -> $(du -m "$WIM" | cut -f1)MB"
 
 # --- 5. remover a experiencia de instalacao da midia -----------------------
-step "removendo setup.exe e autorun da midia (nao instalamos)"
+step "removendo a maquinaria do Windows Setup da midia"
 rm -f "$IMG/setup.exe" "$IMG/sources/setup.exe" "$IMG/autorun.inf" 2>/dev/null || true
+# ~200MB de suporte ao Setup que nao tem como rodar: o setup.exe acabou de sair
+# e quem instala e' o ntstrap. Preserva-se install.wim, boot.wim e o caminho de
+# boot (bootmgr le \sources\boot.wim).
+for lixo in sxs replacementmanifests dlmanifests migration inf vista xp uup \
+            setupplatform.dll migcore.dll migres.dll wdsutil.dll setupcore.dll \
+            setuphost.exe setupprep.exe spwizeng.dll spwizimg.dll unbcl.dll \
+            hwcompat.dll upgrade_frmwrk.xml compatresources.dll; do
+    rm -rf "$IMG/sources/$lixo" 2>/dev/null || true
+done
+# pastas de idioma do Setup (pt-BR, en-US...); o boot.wim ja tem as suas
+find "$IMG/sources" -maxdepth 1 -type d -regextype posix-extended \
+     -regex '.*/[a-z]{2}-[A-Z]{2}$' -exec rm -rf {} + 2>/dev/null || true
+step "sources/ agora: $(du -sh "$IMG/sources" | cut -f1)"
 
 # --- 6. reempacotar ISO hibrida bootavel -----------------------------------
 BIOS="boot/etfsboot.com"
