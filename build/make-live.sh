@@ -138,15 +138,13 @@ cp -a "$REPO/out/." "$STAGE/"
 # ferramentas do instalador, em \NTUnix\install dentro do ambiente live
 step "injetando o ntstrap (instalador)"
 mkdir -p "$STAGE/install"
-NTUNIX_PW="${NTUNIX_PASSWORD:-ntunix}"
-if [ "$NTUNIX_PW" = ntunix ]; then
-    step "AVISO seguranca: senha padrao 'ntunix' — defina NTUNIX_PASSWORD=<senha>"
-fi
+# A senha NAO e' mais renderizada aqui: o template vai com @PLACEHOLDERS@ e o
+# ntstrap os preenche na instalacao, com o que o usuario escolheu. Antes a
+# senha ficava dentro da ISO, identica para todos que usassem aquela midia.
 cp "$REPO/build/ntstrap.cmd"     "$STAGE/install/"
 cp "$REPO/build/strip.list"      "$STAGE/install/"
 cp "$REPO/build/xcopy-skip.txt"  "$STAGE/install/"
-sed "s|@NTUNIX_PW@|$NTUNIX_PW|g" "$REPO/build/unattend-oobe.xml" \
-    > "$STAGE/install/unattend-oobe.xml"
+cp "$REPO/build/unattend-oobe.xml" "$STAGE/install/unattend-oobe.xml"
 # atalho no PATH da sessao: digitar 'ntstrap' no terminal do NTUnix funciona
 cp "$REPO/build/ntstrap.cmd" "$STAGE/system/bin/" 
 step "injetando \\NTUnix e winpeshl.ini no WinPE"

@@ -11,10 +11,12 @@
   UserData, chave de produto ou idioma — aquilo era o instalador da Microsoft
   sendo teleguiado, e ele nao roda mais.
 
-  A senha vem da variavel de build NTUNIX_PASSWORD (o make-live.sh substitui
-  @NTUNIX_PW@). Admin + AutoLogon sao escolhas de appliance de dev: a maquina
-  boota direto no desktop. Para endurecer, troque <Group> para 'Users' e
-  remova o bloco <AutoLogon>.
+  Os @PLACEHOLDERS@ sao preenchidos pelo ntstrap NA INSTALACAO, com o que o
+  usuario escolheu no menu, NAO no build. Antes a senha ia renderizada dentro
+  da ISO, o que a tornava identica para todos que usassem aquela midia.
+
+  Admin + AutoLogon sao escolhas de appliance de dev: a maquina boota direto no
+  desktop. Para endurecer, troque <Group> para 'Users' e remova o <AutoLogon>.
 -->
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
   <settings pass="oobeSystem">
@@ -23,6 +25,7 @@
                publicKeyToken="31bf3856ad364e35"
                language="neutral" versionScope="nonSxS"
                xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <ComputerName>@NTUNIX_HOST@</ComputerName>
       <OOBE>
         <HideEULAPage>true</HideEULAPage>
         <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
@@ -34,7 +37,7 @@
       <UserAccounts>
         <LocalAccounts>
           <LocalAccount wcm:action="add">
-            <Name>ntunix</Name>
+            <Name>@NTUNIX_USER@</Name>
             <Group>Administrators</Group>
             <Password><Value>@NTUNIX_PW@</Value><PlainText>true</PlainText></Password>
           </LocalAccount>
@@ -42,10 +45,21 @@
       </UserAccounts>
       <AutoLogon>
         <Enabled>true</Enabled>
-        <Username>ntunix</Username>
+        <Username>@NTUNIX_USER@</Username>
         <Password><Value>@NTUNIX_PW@</Value><PlainText>true</PlainText></Password>
         <LogonCount>2147483647</LogonCount>
       </AutoLogon>
+    </component>
+    <component name="Microsoft-Windows-International-Core"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral" versionScope="nonSxS">
+      <!-- teclado escolhido no instalador; sem isto herda o layout do WinPE,
+           que num sistema centrado em terminal e' dos piores defeitos. -->
+      <InputLocale>@NTUNIX_KBD@</InputLocale>
+      <SystemLocale>pt-BR</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>pt-BR</UserLocale>
     </component>
   </settings>
 </unattend>
