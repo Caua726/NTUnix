@@ -39,8 +39,27 @@ done
 # O install.wim so entra quando a midia tambem serve de INSTALADOR: ele e' a
 # fonte que o ntstrap aplica no disco. Sem ele a ISO fica pequena, mas so boota
 # live.  NTUNIX_INSTALLER=1  ativa.
+# CACHE: a ISO fonte nao muda (e' a fonte de verdade), entao extrai-la a cada
+# build e' puro desperdicio -- sao 7,7GB e alguns minutos. O cache e' chaveado
+# pelo tamanho+mtime dela; some sozinho se ela for trocada.
+CACHE="${NTUNIX_CACHE:-$REPO/build/cache}"
+CHAVE=$(stat -c '%s-%Y' "$SRC_ISO" 2>/dev/null || echo sem-chave)
+CDIR="$CACHE/$CHAVE"
+
 rm -rf "$IMG"; mkdir -p "$IMG"
 if [ "${NTUNIX_INSTALLER:-}" = 1 ]; then
+    if [ -d "$CDIR/iso" ]; then
+        step "extracao em cache ($CHAVE)"
+        # Hardlink para tudo que o build NAO escreve (instantaneo, sem disco), e
+        # COPIA para os .wim, que sao mutados. Hardlink neles arriscaria corromper
+        # o cache se alguma ferramenta escrevesse no lugar em vez de renomear.
+        cp -al "$CDIR/iso/." "$IMG/" 2>/dev/null
+        for w in install.wim boot.wim; do
+            [ -f "$CDIR/iso/sources/$w" ] || continue
+            rm -f "$IMG/sources/$w"
+            cp "$CDIR/iso/sources/$w" "$IMG/sources/$w"
+        done
+    else
     step "extraindo $SRC_ISO (COM install.wim — midia instalavel)"
     7z x -y -o"$IMG" "$SRC_ISO" >/dev/null
     if [ -f "$IMG/sources/install.esd" ] && [ ! -f "$IMG/sources/install.wim" ]; then
@@ -53,6 +72,10 @@ if [ "${NTUNIX_INSTALLER:-}" = 1 ]; then
         rm -f "$IMG/sources/install.esd"
     fi
     [ -f "$IMG/sources/install.wim" ] || die "sources/install.wim ausente na ISO"
+        step "guardando extracao em cache"
+        mkdir -p "$CDIR/iso"
+        cp -al "$IMG/." "$CDIR/iso/" 2>/dev/null || cp -a "$IMG/." "$CDIR/iso/"
+    fi
 
     # --- enxugar a imagem ANTES de ela ir pra midia ------------------------
     # Duas reducoes, nesta ordem:
@@ -111,12 +134,16 @@ if [ "${NTUNIX_INSTALLER:-}" = 1 ]; then
     wimlib-imagex info "$IW" | grep -E '^(Index|Name):' || true
 
     # o delete nao encolhe o wim sozinho: os recursos so somem no rebuild
+    if [ -n "${NTUNIX_FAST:-}" ]; then
+        step "NTUNIX_FAST: pulando a recompressao solid (ISO maior, build curto)"
+    else
     step "recomprimindo o wim (solid)"
     # LZMS solid com chunk grande: medido 3,3:1 contra 2,3:1 do LZX padrao.
     # O dism aplica solid normalmente (e' o mesmo formato dos .esd do Setup).
     wimlib-imagex optimize "$IW" --solid --solid-chunk-size=64M --recompress >/dev/null 2>&1 \
         || wimlib-imagex optimize "$IW" --solid --recompress >/dev/null 2>&1 \
         || wimlib-imagex optimize "$IW" --recompress >/dev/null
+    fi
     after=$(du -m "$IW" | cut -f1)
     step "install.wim: ${before}MB -> ${after}MB"
 else
@@ -174,7 +201,7 @@ antes=$(du -m "$WIM" | cut -f1)
 # winload.efi com 0xc00000bb. E' por isso que a MS distribui install.esd solid
 # mas mantem o boot.wim em LZX. O install.wim pode ser solid porque quem o le
 # e' o dism, ja dentro do WinPE carregado.
-wimlib-imagex optimize "$WIM" --compress=LZX --recompress >/dev/null 2>&1 || true
+[ -n "${NTUNIX_FAST:-}" ] || wimlib-imagex optimize "$WIM" --compress=LZX --recompress >/dev/null 2>&1 || true
 step "boot.wim: ${antes}MB -> $(du -m "$WIM" | cut -f1)MB"
 
 # --- 5. remover a experiencia de instalacao da midia -----------------------

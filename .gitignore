@@ -54,3 +54,6 @@ Thumbs.db
 build/analysis/
 __pycache__/
 *.pyc
+
+# cache da extracao da ISO fonte (varios GB, regeneravel)
+build/cache/
