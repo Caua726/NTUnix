@@ -106,7 +106,10 @@ if [ "${NTUNIX_INSTALLER:-}" = 1 ]; then
 
     # o delete nao encolhe o wim sozinho: os recursos so somem no rebuild
     step "recomprimindo o wim (solid)"
-    wimlib-imagex optimize "$IW" --solid --recompress >/dev/null 2>&1 \
+    # LZMS solid com chunk grande: medido 3,3:1 contra 2,3:1 do LZX padrao.
+    # O dism aplica solid normalmente (e' o mesmo formato dos .esd do Setup).
+    wimlib-imagex optimize "$IW" --solid --solid-chunk-size=256M --recompress >/dev/null 2>&1 \
+        || wimlib-imagex optimize "$IW" --solid --recompress >/dev/null 2>&1 \
         || wimlib-imagex optimize "$IW" --recompress >/dev/null
     after=$(du -m "$IW" | cut -f1)
     step "install.wim: ${before}MB -> ${after}MB"
@@ -149,6 +152,22 @@ step "injetando \\NTUnix e winpeshl.ini no WinPE"
 wimlib-imagex update "$WIM" 1 --command "add '$STAGE' '\\NTUnix'" >/dev/null
 wimlib-imagex update "$WIM" 1 \
     --command "add '$REPO/build/winpeshl.ini' '\\Windows\\System32\\winpeshl.ini'" >/dev/null
+
+# --- 4b. enxugar o proprio ambiente live -----------------------------------
+# O boot.wim vai inteiro na midia e nunca tinha sido podado. Nada abaixo
+# participa de bootar o WinPE, rodar o nosso desktop ou executar o ntstrap
+# (que precisa de diskpart, dism, bcdboot e reg — todos preservados).
+step "enxugando o ambiente live"
+for path in '\Windows\SysWOW64' '\Windows\Speech' '\Windows\Speech_OneCore' \
+            '\Windows\servicing' '\Windows\WinSxS\Backup' '\Windows\IME' \
+            '\Windows\System32\Recovery' '\Windows\System32\catroot2'; do
+    wimlib-imagex update "$WIM" 1 --command "delete --force --recursive '$path'" \
+        >/dev/null 2>&1 || true
+done
+antes=$(du -m "$WIM" | cut -f1)
+wimlib-imagex optimize "$WIM" --solid --solid-chunk-size=256M --recompress >/dev/null 2>&1 \
+    || wimlib-imagex optimize "$WIM" --recompress >/dev/null 2>&1 || true
+step "boot.wim: ${antes}MB -> $(du -m "$WIM" | cut -f1)MB"
 
 # --- 5. remover a experiencia de instalacao da midia -----------------------
 step "removendo setup.exe e autorun da midia (nao instalamos)"
