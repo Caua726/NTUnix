@@ -21,6 +21,8 @@
 #define NTU_PIPE_LOGD  "\\\\.\\pipe\\ntunix-logd"
 #define NTU_PIPE_DISPD "\\\\.\\pipe\\ntunix-dispd"
 #define NTU_PIPE_DISPD_APP "\\\\.\\pipe\\ntunix-dispd-app"
+#define NTU_PIPE_NTWM_CTL "\\\\.\\pipe\\ntunix-ntwm"
+#define NTU_PIPE_NTWM_EVENTS "\\\\.\\pipe\\ntunix-ntwm-events"
 
 /* ntupath.c — raiz e tradução de caminhos */
 const char *ntu_root(void);                                  /* raiz NTUnix, sem barra final */

@@ -26,8 +26,10 @@ Version `0.1.0-dev`. It boots in a VM. It is not a system to depend on.
 | `initd`     | Service supervisor. `.service` units, NT Job Objects with kill-on-close, `Restart=` with throttle, `Requires=` dependencies, `MemoryMax=`, control pipe. |
 | `ntctl`     | Control client: `list status start stop restart enable disable logs reload ping shutdown`. |
 | `ntsession` | Session shell, in place of `explorer.exe`. Starts initd, hands the screen to dispd, opens a recovery shell if the desktop does not appear. |
-| `dispd`     | Display server and compositor. One real root window; each desktop window is a logical surface with its own DIB. Damage tracking, blur, rounded corners, status bar, tabs. |
-| `ntwm`      | Tiling window manager, derived from dwm. Master/stack, `mfact`, 9 workspaces, floating. It is a separate process: `ntctl restart ntwm` does not disturb the desktop. |
+| `dispd`     | Display server and software compositor. Retained wallpaper/windows/layers/overlay scene, logical vs visual geometry, damage, adaptive blur/shadows and GDI/DXGI presentation. |
+| `ntwm`      | Tiling policy process. Per-workspace dwindle/master state, geometric actions, rules, atomic reload and serialized frame protocol. Restarting it does not disturb surfaces. |
+| `ntbar`     | Independent 34 px layer surface: workspace pills, focused title, layout and clock. |
+| `ntwmctl`   | Request/response client for ntwm dispatchers and status. |
 | `logd`      | Log collector. Appends to `/var/log/system.log` with a timestamp. |
 | `musl-nt`   | The libc. musl 1.2.6 lowered to PE/x86-64 with no UCRT and no MSVCRT. Files, directories, stat, statfs, memory, processes, pty, signals, time, ioctl, sockets. `fork()` is absent by design. |
 | BusyBox     | 86 applets, built against musl-nt without source patches. |
@@ -177,26 +179,25 @@ VFS. `logd` handles one client at a time and does not rotate.
 ## Layout
 
 ```
-src/common/     ntu.h · ntuwm.h · ntupath (path translation) · ntuini · ntuutil
+src/common/     ntu.h · ntuwm.h · ntuapp.h · ntupath · ntuini · ntuutil
 src/initd/      initd · service · pipesrv        src/ntctl/   control client
 src/logd/       log collector                    src/demod/   demo service
 src/ntsession/  session shell (replaces explorer.exe)
 src/dispd/      compositor · present (gdi/dxgi) · vt · term (pty/conpty/scrape)
                 · input · wmproto (dispd<->wm) · appsrv (apps<->dispd) · foreign
-src/ntwm/       tiling wm: ntwm · proto · layout
-src/apps/       ntclock (demo client of the app surface API)
+src/ntwm/       policy: state/layout · config/rules · actions · IPC · protocol
+src/apps/       ntclock · ntbar · ntwmctl
 musl-nt/        nt/ (the NT backend) · tools/ (LP64->COFF rewrite) · test/
 third_party/    libvterm (MIT) — the VT engine from vim/neovim
 etc/            units/*.service · passwd · group · hosts · mtab · ntwm.conf
 build/          fetch-deps · make-live · ntstrap.cmd (the installer) · strip.list
-test/           smoke.sh (runtime) · build-check.sh (image base)
+test/           build-check.sh · desktop-check.sh (desktop fixtures under Wine)
 docs/           contracts, audit, research — see docs/README.md
 ```
 
-Three documents are normative: `docs/VISAO.md` for the architecture,
-`docs/PROTOCOLO.md` for the initd control protocol, `docs/musl-nt-spec.md` for
-the libc ABI and syscalls. Code that contradicts them is a bug, in one or the
-other.
+The normative documents are `docs/VISAO.md` for the founding architecture,
+`docs/PROTOCOLO.md` for initd, `docs/musl-nt-spec.md` for libc and
+`docs/DESKTOP.md` for the desktop state and wire contracts.
 
 ## License
 

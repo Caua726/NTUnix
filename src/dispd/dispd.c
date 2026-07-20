@@ -293,7 +293,8 @@ static int frame_tick(void)   /* retorna 1 se apresentou um quadro */
      * VISIVEIS forcam repaint — um terminal oculto que gera saida nao (#13). */
     static unsigned tick;
     if ((tick % 30) == 0) {
-        g_srv.bar_dirty = 1;        /* relogio + titulo do focado (~2x/s) */
+        if (g_srv.internal_bar)
+            g_srv.bar_dirty = 1;    /* barra compat: relogio/titulo (~2x/s) */
         vt_cursor_tick();           /* audit #115: alterna a fase do cursor... */
         if (g_srv.focused && g_srv.focused->term)
             g_srv.focused->term->dirty = 1;   /* ...e recompoe o focado p/ piscar */
@@ -315,6 +316,11 @@ static int frame_tick(void)   /* retorna 1 se apresentou um quadro */
 static void focus_at(int x, int y)
 {
     Window *w = win_at_point(x, y);
+    if (w && w->scene_layer == SCENE_LAYERS) {
+        if (w->interactivity != NTUAPP_INTERACT_NONE)
+            win_focus(w); /* foco raw da app; nao publica FOCUSED ao ntwm */
+        return;
+    }
     if (w && w != g_srv.focused) {
         win_focus(w);
         wmproto_ev_focused(w);   /* mantem o ntwm em sincronia (#9) */
@@ -357,6 +363,13 @@ static LRESULT CALLBACK root_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
         input_mouse(mx, my, btn, 0, 1);   /* motion */
         return 0;
     }
+    case WM_CANCELMODE:
+        input_cancel_drag();
+        return 0;
+    case WM_CAPTURECHANGED:
+        if ((HWND)lp != h)
+            input_cancel_drag();
+        return 0;
     case WM_DISPLAYCHANGE: {   /* audit #85: resolucao/monitor mudou */
         int nw = LOWORD(lp), nh = HIWORD(lp);
         if (nw < 1) nw = GetSystemMetrics(SM_CXSCREEN);
@@ -414,12 +427,20 @@ static HWND make_root(void)
 
 int main(void)
 {
+    char geometry_test[8] = "";
+    GetEnvironmentVariableA("DISPD_GEOMETRY_SELFTEST", geometry_test,
+                            sizeof geometry_test);
+    if (geometry_test[0] == '1')
+        return compositor_geometry_selftest();
+
     g_srv.scr_w = GetSystemMetrics(SM_CXSCREEN);
     g_srv.scr_h = GetSystemMetrics(SM_CYSCREEN);
     if (g_srv.scr_w < 1) g_srv.scr_w = 1024;
     if (g_srv.scr_h < 1) g_srv.scr_h = 768;
     g_srv.cur_ws = 0;
+    g_srv.old_ws = -1;
     g_srv.next_id = 0;
+    compositor_set_animations(1, 180, 160, 220, 120);
 
     char bk[8] = "";
     GetEnvironmentVariableA("DISPD_SELFTEST", bk, sizeof bk);
@@ -442,7 +463,12 @@ int main(void)
         dispd_log("compositor_init falhou — abortando");
         return 1;
     }
-    g_srv.bar_h = g_srv.cellh + 6;
+    /* A barra normal agora e uma layer surface (ntbar). Sem ela a reserva e
+     * zero. DISPD_INTERNAL_BAR=1 mantem a barra antiga apenas para diagnostico. */
+    char ib[8] = "";
+    GetEnvironmentVariableA("DISPD_INTERNAL_BAR", ib, sizeof ib);
+    g_srv.internal_bar = ib[0] == '1';
+    g_srv.bar_h = g_srv.internal_bar ? g_srv.cellh + 6 : 0;
     g_srv.title_h = g_srv.cellh + 4;   /* barra de titulo por janela */
     char nt[8] = "";
     GetEnvironmentVariableA("DISPD_NOTITLES", nt, sizeof nt);

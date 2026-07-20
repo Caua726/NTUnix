@@ -10,10 +10,28 @@
 #define DISPD_H
 
 #include "../common/ntu.h"
+#include "../common/ntuapp.h"
+#include "../common/ntuwm.h"
 #include "present.h"
 #include "term.h"
 
 typedef enum { WK_TERM = 0, WK_APP = 1, WK_FOREIGN = 2 } WinKind;
+typedef enum {
+    SCENE_WALLPAPER = 0,
+    SCENE_WINDOWS = 1,
+    SCENE_LAYERS = 2,
+    SCENE_OVERLAY = 3
+} SceneLayer;
+typedef enum { APP_ROLE_TOPLEVEL = 0, APP_ROLE_LAYER = 1 } AppRole;
+
+typedef struct AnimatedRect {
+    RECT      begin;
+    RECT      current;
+    RECT      goal;
+    ULONGLONG start_ms;
+    int       duration_ms;
+    int       active;
+} AnimatedRect;
 
 typedef struct Window {
     unsigned  id;
@@ -21,14 +39,24 @@ typedef struct Window {
     char      title[256];
     DWORD     pid;
 
-    RECT      rect;        /* retangulo completo na raiz (inclui borda) */
+    RECT      rect;        /* destino logico confirmado (inclui borda) */
+    AnimatedRect visual;   /* retangulo visual; nunca usado para input/politica */
     int       ws;          /* workspace */
     int       z;           /* empilhamento dentro do ws */
     int       floating;    /* estado floating (declarado pelo WM; persiste p/ restart #33) */
+    int       fullscreen;
+    int       maximized;
     int       visible;
     int       focused;
     int       border_px;
     COLORREF  border_rgb;
+    COLORREF  focus_rgb;
+    int       opacity;     /* 0..255 */
+    int       shadow;
+    int       corner_radius;
+    int       animate;
+    int       titlebar;
+    SceneLayer scene_layer;
 
     /* backing store do conteudo (area cliente = rect menos borda) */
     HDC       memdc;
@@ -43,6 +71,12 @@ typedef struct Window {
     int       active_tab;
 
     HANDLE    section;     /* kind==WK_APP: section compartilhada com o app */
+    AppRole   app_role;
+    unsigned  anchors;
+    int       exclusive_zone;
+    int       interactivity;
+    int       premultiplied;
+    unsigned  configure_serial;
     HWND      hwnd;        /* kind==WK_FOREIGN: a janela do Windows gerenciada */
     LONG_PTR  orig_style;  /* estilo original (p/ restaurar ao soltar) */
     RECT      fg_target;   /* kind==WK_FOREIGN: onde a janela DEVE ficar (re-snap) */
@@ -74,6 +108,7 @@ typedef struct Server {
     int       cellw, cellh;
 
     int       bar_h;       /* altura da barra de status no topo */
+    int       internal_bar;/* compat visual antiga; 0 quando ntbar e' usado */
     int       title_h;     /* altura da barra de titulo por janela (0=off) */
     int       dirty;       /* recompoe A TELA TODA neste tick (mudanca estrutural) */
     int       bar_dirty;   /* so a barra de status mudou (relogio/titulo) */
@@ -83,6 +118,16 @@ typedef struct Server {
     long      keys_seen;   /* diagnostico: teclas capturadas pelo hook */
     int       selftest;    /* DISPD_SELFTEST=1: so retangulos, sem term/ntwm */
     int       running;
+
+    /* configuracao de animacao recebida atomicamente do ntwm */
+    int       animations;
+    int       move_ms, open_ms, workspace_ms, focus_ms;
+    int       old_ws;
+    int       workspace_anim_dir;
+    ULONGLONG workspace_anim_ms;
+    int       quality_level;     /* 0 completo, 1 sem blur, 2 sombra simples */
+    int       slow_frames;
+    unsigned  interactive_wid;  /* manipulacao manual: visual acompanha o cursor */
 
     char      toast[192];  /* #2: mensagem transitoria (erro/feedback) no canto */
     ULONGLONG toast_ms;    /* inicio do toast (0 = nenhum) */
@@ -99,9 +144,11 @@ int      compositor_init(void);   /* 0=ok, -1=backbuffer falhou (#95) */
 int      compositor_resize(int w, int h);   /* #85: recria backbuffer (WM_DISPLAYCHANGE) */
 Window  *win_create(WinKind kind, int cw, int ch);
 Window  *win_create_shared(int cw, int ch, HANDLE section); /* WK_APP: DIB sobre section */
+int      win_replace_shared(Window *w, int cw, int ch, HANDLE section);
 void     win_destroy(Window *w);
 Window  *win_find(unsigned id);
 void     win_set_client_size(Window *w, int cw, int ch);
+void     win_set_logical_rect(Window *w, const RECT *goal);
 void     win_focus(Window *w);
 void     compose_and_present(void);
 int      compositor_animating(void);   /* #35: ha janela animando -> manter frames */
@@ -109,6 +156,11 @@ void     compositor_ghost_capture(const RECT *r);  /* #103: snapshot p/ fade-out
 int      compositor_ghosts_active(void);           /* #103: ha fade em andamento */
 int      bar_ws_at(int x, int y);      /* #3: workspace clicado na barra (-1 = nenhum) */
 Window  *win_at_point(int x, int y);   /* topo visivel no ws atual */
+void     compositor_set_animations(int enabled, int move_ms, int open_ms,
+                                   int workspace_ms, int focus_ms);
+void     compositor_set_workspace(int ws);
+void     compositor_recompute_workarea(void);
+int      compositor_geometry_selftest(void);
 
 /* input.c — teclado: hook LL global (enfileira) + WM_KEYDOWN fallback */
 void     input_install_hook(void);
@@ -118,6 +170,7 @@ int      input_hook_active(void);
 void     input_key(unsigned vk, unsigned scan);     /* fallback WM_KEYDOWN */
 void     input_keyup(unsigned vk, unsigned scan);   /* fallback WM_KEYUP (#13) */
 void     input_mouse(int x, int y, int button, int press, int motion);  /* #8/#9 */
+void     input_cancel_drag(void);
 
 /* wmproto.c */
 void     wmproto_start(void);                 /* sobe o servidor de pipe (thread) */
@@ -126,6 +179,7 @@ void     wmproto_drain(void);                 /* main thread: aplica comandos na
 void     wmproto_abort_frame(void);           /* descarta um FRAME travado (#30) */
 int      wmproto_connected(void);
 int      wmproto_grabbed(unsigned mods, unsigned vk);
+unsigned wmproto_pointer_mod(void);
 void     wmproto_ev_created(Window *w);
 void     wmproto_ev_destroyed(unsigned id);
 void     wmproto_ev_title(Window *w);
@@ -134,6 +188,8 @@ void     wmproto_ev_key(unsigned mods, unsigned vk);
 void     wmproto_ev_output(void);   /* #85: tela mudou -> WM re-tila */
 void     wmproto_ev_wsreq(int ws);  /* #3: usuario clicou um workspace na barra */
 void     wmproto_ev_moved(unsigned id, int x, int y, int w, int h);  /* #5: arrasto */
+void     wmproto_ev_pointer(unsigned id, int x, int y, int button,
+                            int state, unsigned mods);
 
 /* appsrv.c — fronteira apps<->dispd (surface compartilhada via section) */
 void     appsrv_start(void);   /* sobe o servidor multi-cliente (thread) */
@@ -141,6 +197,9 @@ void     appsrv_drain(void);   /* main thread: aplica pedidos dos apps */
 void     appsrv_close_wid(unsigned id);            /* fecha a conexao do app */
 void     appsrv_input_key(unsigned id, unsigned mods, unsigned vk, unsigned ch, int down);
 void     appsrv_input_mouse(unsigned id, int x, int y, int buttons);
+void     appsrv_input_pointer(unsigned id, int x, int y, int buttons,
+                             int button, int state, int axis);
+void     appsrv_reconfigure_layers(void);
 
 /* foreign.c — gerencia janelas nativas do Windows (taskmgr, notepad, browser…)
  * como WK_FOREIGN: descobre via WinEventHook, tila via SetWindowPos (modelo

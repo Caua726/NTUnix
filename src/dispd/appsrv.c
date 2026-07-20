@@ -31,6 +31,17 @@ typedef struct AppConn {
     volatile LONG dead;
     volatile LONG created;    /* 0=pendente, 1=ok, -1=falhou */
     volatile LONG commit;     /* audit #32: flag de commit pendente (nao dropa como a fila) */
+    int proto_ver;
+    AppRole role;
+    unsigned anchors;
+    int exclusive_zone;
+    int interactivity;
+    volatile LONG acked_serial;
+    volatile LONG current_serial;
+    volatile LONG announced;
+    HANDLE pending_section;
+    int pending_w, pending_h;
+    char pending_name[80];
     struct AppConn *next;
 } AppConn;
 
@@ -40,12 +51,18 @@ static volatile LONG g_appctr;
 static volatile LONG g_nconns;        /* conexoes vivas (quota anti-DoS #128) */
 #define MAX_APPCONNS 32
 
-typedef enum { AQ_CREATE, AQ_COMMIT, AQ_DESTROY } AqType;
+typedef enum { AQ_CREATE, AQ_RECONFIGURE, AQ_DESTROY } AqType;
 typedef struct {
     AqType   type;
     HANDLE   section;
     int      w, h;
     char     title[128];
+    int      proto_ver;
+    AppRole  role;
+    unsigned anchors;
+    int      exclusive_zone;
+    int      interactivity;
+    unsigned serial;
     AppConn *conn;
 } AqItem;
 
@@ -178,6 +195,76 @@ void appsrv_input_mouse(unsigned id, int x, int y, int buttons)
              app_send_to(c, b, 0, 0); }   /* #38: input real-time, zero-wait */
 }
 
+void appsrv_input_pointer(unsigned id, int x, int y, int buttons,
+                          int button, int state, int axis)
+{
+    AppConn *c = conns_find(id);
+    if (!c)
+        return;
+    char b[112];
+    if (c->proto_ver >= 2) {
+        snprintf(b, sizeof b, "%s %d %d %d %d %d %d", APP_EVT_POINTER,
+                 x, y, buttons, button, state, axis);
+        app_send_to(c, b, 0, 0);
+    } else {
+        appsrv_input_mouse(id, x, y, buttons);
+    }
+}
+
+void appsrv_reconfigure_layers(void)
+{
+    /* Pode ser chamado antes de appsrv_start durante init/resize inicial. */
+    if (!InterlockedCompareExchange(&g_nconns, 0, 0))
+        return;
+    EnterCriticalSection(&g_conns_lock);
+    for (AppConn *c = g_conns; c; c = c->next) {
+        if (c->proto_ver < 2 || c->role != APP_ROLE_LAYER ||
+            InterlockedCompareExchange(&c->dead, 0, 0))
+            continue;
+        Window *w = win_find((unsigned)c->wid);
+        if (!w)
+            continue;
+        int nw = w->cw, nh = w->ch;
+        if ((c->anchors & (NTUAPP_ANCHOR_LEFT | NTUAPP_ANCHOR_RIGHT)) ==
+            (NTUAPP_ANCHOR_LEFT | NTUAPP_ANCHOR_RIGHT))
+            nw = g_srv.scr_w;
+        if ((c->anchors & (NTUAPP_ANCHOR_TOP | NTUAPP_ANCHOR_BOTTOM)) ==
+            (NTUAPP_ANCHOR_TOP | NTUAPP_ANCHOR_BOTTOM))
+            nh = g_srv.scr_h;
+        if (nw == w->cw && nh == w->ch)
+            continue;
+        EnterCriticalSection(&c->wlock);
+        if (c->pending_section) {
+            LeaveCriticalSection(&c->wlock);
+            continue;
+        }
+        LONG serial = InterlockedIncrement(&c->current_serial);
+        LONG id = InterlockedIncrement(&g_appctr);
+        unsigned salt = (unsigned)GetTickCount() ^
+                        ((unsigned)id * 2654435761u) ^ (unsigned)(UINT_PTR)c;
+        snprintf(c->pending_name, sizeof c->pending_name,
+                 "ntunix-appsurf-%ld-%08x", (long)id, salt);
+        HANDLE section = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL,
+                                            PAGE_READWRITE, 0,
+                                            (DWORD)(nw * nh * 4),
+                                            c->pending_name);
+        if (!section || GetLastError() == ERROR_ALREADY_EXISTS) {
+            if (section) CloseHandle(section);
+            LeaveCriticalSection(&c->wlock);
+            continue;
+        }
+        c->pending_section = section;
+        c->pending_w = nw;
+        c->pending_h = nh;
+        LeaveCriticalSection(&c->wlock);
+        char msg[192];
+        snprintf(msg, sizeof msg, "%s %ld %s %d %d", APP_EVT_CONFIGURE,
+                 (long)serial, c->pending_name, nw, nh);
+        app_send(c, msg);
+    }
+    LeaveCriticalSection(&g_conns_lock);
+}
+
 /* audit #39: mata o app por PID depois de um grace period, dando tempo pra ele
  * salvar apos o APP-CLOSE-REQUEST. Por PID (nao toca na conexao) -> sem corrida
  * com o worker; se o app ja saiu, o TerminateProcess num PID morto e' no-op. */
@@ -213,6 +300,7 @@ void appsrv_close_wid(unsigned id)
 
 void appsrv_drain(void)
 {
+    int workarea_changed = 0;
     AqItem it;
     while (aq_pop(&it)) {
         if (it.type == AQ_CREATE) {
@@ -223,20 +311,74 @@ void appsrv_drain(void)
                 w->title[sizeof w->title - 1] = 0;
                 for (char *p = w->title; *p; p++)          /* #17 sem injecao */
                     if ((unsigned char)*p < 0x20) *p = ' ';
+                w->app_role = it.role;
+                w->premultiplied = it.proto_ver >= 2;
+                w->anchors = it.anchors;
+                w->exclusive_zone = it.exclusive_zone;
+                w->interactivity = it.interactivity;
+                w->configure_serial = it.serial;
+                if (it.role == APP_ROLE_LAYER) {
+                    w->scene_layer = SCENE_LAYERS;
+                    w->z = 10000;
+                    w->border_px = 0;
+                    w->titlebar = 0;
+                    w->shadow = 0;
+                    w->corner_radius = 0;
+                    w->opacity = 255;
+                    int x = (it.anchors & NTUAPP_ANCHOR_LEFT) ? 0 :
+                            (it.anchors & NTUAPP_ANCHOR_RIGHT) ?
+                            g_srv.scr_w - it.w : (g_srv.scr_w - it.w) / 2;
+                    int y = (it.anchors & NTUAPP_ANCHOR_TOP) ? 0 :
+                            (it.anchors & NTUAPP_ANCHOR_BOTTOM) ?
+                            g_srv.scr_h - it.h : (g_srv.scr_h - it.h) / 2;
+                    RECT goal = { x, y, x + it.w, y + it.h };
+                    win_set_logical_rect(w, &goal);
+                }
+                w->visible = it.proto_ver < 2; /* v2 so mapeia no ACK+COMMIT */
                 InterlockedExchange(&it.conn->wid, (LONG)w->id);
                 InterlockedExchange(&it.conn->created, 1);
-                win_focus(w);
-                wmproto_ev_created(w);
+                if (it.proto_ver < 2) {
+                    win_focus(w);
+                    wmproto_ev_created(w);
+                    InterlockedExchange(&it.conn->announced, 1);
+                }
                 dispd_log("app conectado (id %u, %dx%d, %s)", w->id, it.w, it.h, it.title);
             } else {
                 if (it.section) CloseHandle(it.section);
                 InterlockedExchange(&it.conn->created, -1);
             }
             SetEvent(it.conn->ready);   /* libera o worker p/ APP-SURFACE/ERR (#46) */
+        } else if (it.type == AQ_RECONFIGURE) {
+            Window *w = win_find((unsigned)it.conn->wid);
+            if (!w || win_replace_shared(w, it.w, it.h, it.section) != 0) {
+                if (it.section) CloseHandle(it.section);
+            } else {
+                w->configure_serial = it.serial;
+                if (w->scene_layer == SCENE_LAYERS) {
+                    int x = (w->anchors & NTUAPP_ANCHOR_LEFT) ? 0 :
+                            (w->anchors & NTUAPP_ANCHOR_RIGHT) ?
+                            g_srv.scr_w - it.w : (g_srv.scr_w - it.w) / 2;
+                    int y = (w->anchors & NTUAPP_ANCHOR_TOP) ? 0 :
+                            (w->anchors & NTUAPP_ANCHOR_BOTTOM) ?
+                            g_srv.scr_h - it.h : (g_srv.scr_h - it.h) / 2;
+                    RECT goal = { x, y, x + it.w, y + it.h };
+                    win_set_logical_rect(w, &goal);
+                }
+            }
         } else { /* AQ_DESTROY: worker ja saiu e removeu do registro */
             unsigned id = (unsigned)it.conn->wid;
             Window *w = win_find(id);
-            if (w) { win_destroy(w); wmproto_ev_destroyed(id); }
+            if (w) {
+                int layer = w->scene_layer == SCENE_LAYERS;
+                int announced = InterlockedCompareExchange(&it.conn->announced, 0, 0);
+                win_destroy(w);
+                if (!layer && announced)
+                    wmproto_ev_destroyed(id);
+                if (layer)
+                    workarea_changed = 1;
+            }
+            if (it.conn->pending_section)
+                CloseHandle(it.conn->pending_section);
             CloseHandle(it.conn->rev);
             CloseHandle(it.conn->wev);
             CloseHandle(it.conn->ready);
@@ -251,10 +393,29 @@ void appsrv_drain(void)
     for (AppConn *c = g_conns; c; c = c->next) {
         if (InterlockedExchange(&c->commit, 0)) {
             Window *w = win_find((unsigned)c->wid);
-            if (w) { w->dirty = 1; g_srv.dirty = 1; }
+            if (w) {
+                if (c->proto_ver >= 2 &&
+                    InterlockedCompareExchange(&c->acked_serial, 0, 0) !=
+                    InterlockedCompareExchange(&c->current_serial, 0, 0))
+                    continue;
+                if (!InterlockedCompareExchange(&c->announced, 0, 0)) {
+                    w->visible = 1;
+                    InterlockedExchange(&c->announced, 1);
+                    if (w->scene_layer == SCENE_LAYERS)
+                        workarea_changed = 1;
+                    else {
+                        win_focus(w);
+                        wmproto_ev_created(w);
+                    }
+                }
+                w->dirty = 1;
+                g_srv.dirty = 1;
+            }
         }
     }
     LeaveCriticalSection(&g_conns_lock);
+    if (workarea_changed)
+        compositor_recompute_workarea();
 }
 
 /* ---- worker por app (overlapped reads) ---- */
@@ -285,6 +446,17 @@ static DWORD WINAPI worker_main(LPVOID arg)
         free(c);
         InterlockedDecrement(&g_nconns);
         return 0;
+    }
+    {
+        DWORD client_session = (DWORD)-1, server_session = (DWORD)-2;
+        if (!ProcessIdToSessionId(c->pid, &client_session) ||
+            !ProcessIdToSessionId(GetCurrentProcessId(), &server_session) ||
+            client_session != server_session) {
+            CloseHandle(pipe);
+            free(c);
+            InterlockedDecrement(&g_nconns);
+            return 0;
+        }
     }
     c->rev = CreateEventA(NULL, TRUE, FALSE, NULL);
     c->wev = CreateEventA(NULL, TRUE, FALSE, NULL);
@@ -348,18 +520,61 @@ static DWORD WINAPI worker_main(LPVOID arg)
 
         if (verb_is(buf, "APP-HELLO") && !created) {
             char *p = buf + 9;
-            int w = (int)strtol(p, &p, 10);
-            int h = (int)strtol(p, &p, 10);
+            while (*p == ' ' || *p == '\t') p++;
+            int first = (int)strtol(p, &p, 10);
+            int proto = 1;
+            AppRole role = APP_ROLE_TOPLEVEL;
+            unsigned anchors = 0;
+            int exclusive = 0, interactivity = NTUAPP_INTERACT_ON_DEMAND;
+            int w, h;
+            if (first == NTUAPP_PROTO_VER) {
+                proto = NTUAPP_PROTO_VER;
+                while (*p == ' ' || *p == '\t') p++;
+                char *role_start = p;
+                while (*p && *p != ' ' && *p != '\t') p++;
+                char saved = *p;
+                *p = 0;
+                if (!_stricmp(role_start, NTUAPP_ROLE_LAYER))
+                    role = APP_ROLE_LAYER;
+                else if (_stricmp(role_start, NTUAPP_ROLE_TOPLEVEL)) {
+                    app_send(c, APP_EVT_ERROR " role-invalido");
+                    break;
+                }
+                *p = saved;
+                w = (int)strtol(p, &p, 10);
+                h = (int)strtol(p, &p, 10);
+                anchors = (unsigned)strtoul(p, &p, 0);
+                exclusive = (int)strtol(p, &p, 10);
+                interactivity = (int)strtol(p, &p, 10);
+            } else {
+                w = first;
+                h = (int)strtol(p, &p, 10);
+            }
             while (*p == ' ' || *p == '\t') p++;
             char title[128] = "app";
             if (*p) { strncpy(title, p, sizeof title - 1); title[sizeof title - 1] = 0; }
             ntu_trim(title);
             if (w < 1) w = 200;
             if (h < 1) h = 100;
+            if (role == APP_ROLE_LAYER) {
+                if ((anchors & (NTUAPP_ANCHOR_LEFT | NTUAPP_ANCHOR_RIGHT)) ==
+                    (NTUAPP_ANCHOR_LEFT | NTUAPP_ANCHOR_RIGHT))
+                    w = g_srv.scr_w;
+                if ((anchors & (NTUAPP_ANCHOR_TOP | NTUAPP_ANCHOR_BOTTOM)) ==
+                    (NTUAPP_ANCHOR_TOP | NTUAPP_ANCHOR_BOTTOM))
+                    h = g_srv.scr_h;
+                if (w > 4096) w = 4096;
+                if (h > 1024) h = 1024;
+                if (exclusive < 0) exclusive = 0;
+                if (exclusive > h) exclusive = h;
+                if (interactivity < NTUAPP_INTERACT_NONE ||
+                    interactivity > NTUAPP_INTERACT_EXCLUSIVE)
+                    interactivity = NTUAPP_INTERACT_NONE;
+            }
             /* audit #37: teto por-surface baixado p/ 1024 (<=4MB/app) — 32 apps
              * x 4MB = 128MB = MemoryMax; antes 2048 dava 32x16MB = 512MB > limite.
              * (orcamento AGREGADO por bytes = refinamento futuro.) */
-            if (w > 1024) w = 1024;
+            if (role != APP_ROLE_LAYER && w > 1024) w = 1024;
             if (h > 1024) h = 1024;
 
             char name[80];
@@ -380,23 +595,66 @@ static DWORD WINAPI worker_main(LPVOID arg)
             AqItem it;
             ZeroMemory(&it, sizeof it);
             it.type = AQ_CREATE; it.section = sec; it.w = w; it.h = h;
-            strncpy(it.title, title, sizeof it.title - 1);
+            strcpy(it.title, title);
+            it.proto_ver = proto; it.role = role; it.anchors = anchors;
+            it.exclusive_zone = exclusive; it.interactivity = interactivity;
+            it.serial = 1;
             it.conn = c;
+            c->proto_ver = proto; c->role = role; c->anchors = anchors;
+            c->exclusive_zone = exclusive; c->interactivity = interactivity;
+            InterlockedExchange(&c->current_serial, 1);
             ResetEvent(c->ready);
             aq_push_reliable(&it);   /* nao perde o CREATE (senao vaza a section, #56) */
             WaitForSingleObject(c->ready, 5000);
 
             if (InterlockedCompareExchange(&c->created, 0, 0) == 1) {
-                char resp[128];
-                snprintf(resp, sizeof resp, "APP-SURFACE %s %d %d", name, w, h);
-                app_send(c, resp);
+                char resp[192];
+                if (proto >= 2) {
+                    snprintf(resp, sizeof resp, "%s %d %ld", APP_EVT_WELCOME,
+                             NTUAPP_PROTO_VER, (long)c->wid);
+                    app_send(c, resp);
+                    snprintf(resp, sizeof resp, "%s 1 %s %d %d",
+                             APP_EVT_CONFIGURE, name, w, h);
+                    app_send(c, resp);
+                } else {
+                    snprintf(resp, sizeof resp, "%s %s %d %d",
+                             APP_EVT_SURFACE, name, w, h);
+                    app_send(c, resp);
+                }
                 created = 1;
             } else {
                 app_send(c, "APP-ERR create-failed");
                 break;
             }
-        } else if (verb_is(buf, "APP-COMMIT")) {
-            InterlockedExchange(&c->commit, 1);   /* audit #32: flag (o main poll no drain) */
+        } else if (verb_is(buf, APP_CMD_ACK) && c->proto_ver >= 2) {
+            unsigned serial = (unsigned)strtoul(buf + strlen(APP_CMD_ACK), NULL, 10);
+            if (serial != (unsigned)InterlockedCompareExchange(&c->current_serial, 0, 0))
+                continue;
+            InterlockedExchange(&c->acked_serial, (LONG)serial);
+            EnterCriticalSection(&c->wlock);
+            HANDLE pending = c->pending_section;
+            if (pending) {
+                AqItem it;
+                ZeroMemory(&it, sizeof it);
+                it.type = AQ_RECONFIGURE;
+                it.section = pending;
+                it.w = c->pending_w;
+                it.h = c->pending_h;
+                it.serial = serial;
+                it.conn = c;
+                c->pending_section = NULL;
+                LeaveCriticalSection(&c->wlock);
+                aq_push_reliable(&it);
+            } else {
+                LeaveCriticalSection(&c->wlock);
+            }
+        } else if (verb_is(buf, APP_CMD_COMMIT)) {
+            unsigned serial = c->proto_ver >= 2
+                ? (unsigned)strtoul(buf + strlen(APP_CMD_COMMIT), NULL, 10) : 0;
+            if (c->proto_ver < 2 ||
+                (serial != 0 &&
+                 serial == (unsigned)InterlockedCompareExchange(&c->acked_serial, 0, 0)))
+                InterlockedExchange(&c->commit, 1);
         } else if (verb_is(buf, "APP-CLOSE")) {
             break;
         }

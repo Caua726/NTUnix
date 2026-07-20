@@ -14,6 +14,15 @@ Service *g_services = NULL;
 
 static DWORD WINAPI watcher_main(LPVOID arg);
 
+static void copy_capped(char *dst, size_t cap, const char *src)
+{
+    if (!cap) return;
+    size_t n = strlen(src);
+    if (n >= cap) n = cap - 1;
+    memcpy(dst, src, n);
+    dst[n] = 0;
+}
+
 /* ---------------- parsing de units ---------------- */
 
 static unsigned long long parse_size(const char *v)
@@ -39,8 +48,8 @@ static void add_deps(Service *s, const char *value)
         if (dot && !_stricmp(dot, ".service"))
             *dot = 0; /* "logd.service" → "logd" */
         if (s->nrequires < MAX_DEPS) {
-            strncpy(s->requires_[s->nrequires], name, 63);
-            s->requires_[s->nrequires][63] = 0;
+            copy_capped(s->requires_[s->nrequires],
+                        sizeof s->requires_[s->nrequires], name);
             s->nrequires++;
         }
     }
@@ -109,7 +118,10 @@ int svc_scan_units(void)
 {
     char dir[MAX_PATH], pat[MAX_PATH];
     ntu_path("/etc/units", dir, sizeof dir);
-    snprintf(pat, sizeof pat, "%s\\*.service", dir);
+    if (strlen(dir) + strlen("\\*.service") >= sizeof pat)
+        return 0;
+    strcpy(pat, dir);
+    strcat(pat, "\\*.service");
 
     WIN32_FIND_DATAA fd;
     HANDLE h = FindFirstFileA(pat, &fd);
@@ -121,10 +133,15 @@ int svc_scan_units(void)
         Service parsed;
         memset(&parsed, 0, sizeof parsed);
 
-        strncpy(parsed.name, fd.cFileName, sizeof parsed.name - 1);
+        if (strlen(fd.cFileName) >= sizeof parsed.name ||
+            strlen(dir) + 1 + strlen(fd.cFileName) >= sizeof parsed.unit_path)
+            continue;
+        strcpy(parsed.name, fd.cFileName);
         char *dot = strrchr(parsed.name, '.');
         if (dot) *dot = 0;
-        snprintf(parsed.unit_path, sizeof parsed.unit_path, "%s\\%s", dir, fd.cFileName);
+        strcpy(parsed.unit_path, dir);
+        strcat(parsed.unit_path, "\\");
+        strcat(parsed.unit_path, fd.cFileName);
 
         if (ntu_ini_parse(parsed.unit_path, unit_kv, &parsed) != 0) {
             ilog("%s: falha ao ler %s", parsed.name, parsed.unit_path);
@@ -153,7 +170,7 @@ int svc_scan_units(void)
             /* recarrega config de servico parado; unit de servico rodando
              * so e aplicada no proximo restart (v0: nem isso — skip) */
             copy_config(s, &parsed);
-            strncpy(s->unit_path, parsed.unit_path, sizeof s->unit_path - 1);
+            copy_capped(s->unit_path, sizeof s->unit_path, parsed.unit_path);
         }
         s->enabled = is_enabled(s->name);
         LeaveCriticalSection(&g_lock);
@@ -169,7 +186,7 @@ static int svc_spawn(Service *s, char *err, size_t errcap)
 {
     /* separa programa e argumentos (v0: sem quoting, split no 1o espaco) */
     char prog[512] = "", rest[512] = "";
-    strncpy(prog, s->exec_start, sizeof prog - 1);
+    copy_capped(prog, sizeof prog, s->exec_start);
     char *sp = strchr(prog, ' ');
     if (sp) {
         *sp = 0;

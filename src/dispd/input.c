@@ -319,9 +319,70 @@ int input_hook_active(void)
 static unsigned g_capture_wid;   /* audit #18: janela que capturou o mouse no down */
 static unsigned g_drag_wid;      /* audit #5: janela floating sendo arrastada */
 static int      g_drag_dx, g_drag_dy;   /* offset do cursor dentro da janela */
+static unsigned g_policy_drag_wid;
+static int      g_policy_drag_button;
+static unsigned g_policy_drag_mods;
+
+static void pointer_capture_begin(unsigned wid)
+{
+    g_srv.interactive_wid = wid;
+    if (g_srv.root)
+        SetCapture(g_srv.root);
+}
+
+static void pointer_capture_end(void)
+{
+    g_srv.interactive_wid = 0;
+    if (g_srv.root && GetCapture() == g_srv.root)
+        ReleaseCapture();
+}
+
+void input_cancel_drag(void)
+{
+    if (g_policy_drag_wid && wmproto_connected()) {
+        Window *w = win_find(g_policy_drag_wid);
+        POINT p;
+        GetCursorPos(&p);
+        if (g_srv.root)
+            ScreenToClient(g_srv.root, &p);
+        if (w)
+            wmproto_ev_pointer(w->id, p.x, p.y, g_policy_drag_button, 3,
+                               g_policy_drag_mods);
+    }
+    if (g_drag_wid) {
+        Window *w = win_find(g_drag_wid);
+        if (w)
+            wmproto_ev_moved(w->id, w->rect.left, w->rect.top,
+                             w->rect.right - w->rect.left,
+                             w->rect.bottom - w->rect.top);
+    }
+    g_capture_wid = 0;
+    g_drag_wid = 0;
+    g_policy_drag_wid = 0;
+    g_policy_drag_button = 0;
+    g_policy_drag_mods = 0;
+    pointer_capture_end();
+}
 
 void input_mouse(int sx, int sy, int button, int press, int motion)
 {
+    /* Mod+LMB/RMB pertence a politica do ntwm. O dispd captura o gesto e envia
+     * coordenadas de tela; o WM decide mover/reinserir ou redimensionar. */
+    if (g_policy_drag_wid) {
+        Window *pw = win_find(g_policy_drag_wid);
+        int state = motion ? 2 : (press ? 1 : 0);
+        if (pw)
+            wmproto_ev_pointer(pw->id, sx, sy, g_policy_drag_button,
+                               state, g_policy_drag_mods);
+        if (!pw || (!motion && !press)) {
+            g_policy_drag_wid = 0;
+            g_policy_drag_button = 0;
+            g_policy_drag_mods = 0;
+            pointer_capture_end();
+        }
+        return;
+    }
+
     /* audit #5: arrasto de janela floating pela barra de titulo (i3-style). Move
      * o rect na hora (feedback) e, no release, manda MOVED pro WM persistir a
      * geometria (senao o proximo frame do WM devolveria a janela pra cascata). */
@@ -330,14 +391,15 @@ void input_mouse(int sx, int sy, int button, int press, int motion)
         if (dw && motion) {
             int wpx = dw->rect.right - dw->rect.left, hpx = dw->rect.bottom - dw->rect.top;
             int nx = sx - g_drag_dx, ny = sy - g_drag_dy;
-            SetRect(&dw->rect, nx, ny, nx + wpx, ny + hpx);
-            g_srv.dirty = 1;
+            RECT goal = { nx, ny, nx + wpx, ny + hpx };
+            win_set_logical_rect(dw, &goal);
         } else {   /* release (ou a janela sumiu) -> encerra e persiste */
             if (dw)
                 wmproto_ev_moved(dw->id, dw->rect.left, dw->rect.top,
                                  dw->rect.right - dw->rect.left,
                                  dw->rect.bottom - dw->rect.top);
             g_drag_wid = 0;
+            pointer_capture_end();
         }
         return;
     }
@@ -357,24 +419,40 @@ void input_mouse(int sx, int sy, int button, int press, int motion)
         g_capture_wid = 0;
         return;
     }
+    if (press && !motion && (button == 0 || button == 2) &&
+        wmproto_connected()) {
+        unsigned mods = cur_mods();
+        unsigned required = wmproto_pointer_mod();
+        if (required && (mods & required) == required) {
+            g_policy_drag_wid = w->id;
+            g_policy_drag_button = button;
+            g_policy_drag_mods = mods;
+            pointer_capture_begin(w->id);
+            wmproto_ev_pointer(w->id, sx, sy, button, 1, mods);
+            return;
+        }
+    }
     if (press && !motion && button < 64)   /* primeiro botao (nao roda) -> captura */
         g_capture_wid = w->id;
 
     /* audit #5: janela floating -> comeca o arrasto ao apertar na barra de titulo */
     if (w->floating && button == 0 && press && !motion && g_srv.title_h > 0) {
+        int title_h = w->titlebar ? g_srv.title_h : 0;
         int tby = w->rect.top + w->border_px;
-        if (sy >= tby && sy < tby + g_srv.title_h) {
+        if (sy >= tby && sy < tby + title_h) {
             g_drag_wid = w->id;
             g_drag_dx = sx - w->rect.left;
             g_drag_dy = sy - w->rect.top;
+            pointer_capture_begin(w->id);
             return;
         }
     }
 
     /* clique na barra de abas -> troca de aba */
     if (w->kind == WK_TERM && w->ntabs > 0 && button == 0 && press && !motion) {
+        int title_h = w->titlebar ? g_srv.title_h : 0;
         int tby = w->rect.top + w->border_px;
-        if (g_srv.title_h > 0 && sy >= tby && sy < tby + g_srv.title_h) {
+        if (title_h > 0 && sy >= tby && sy < tby + title_h) {
             int tix = w->rect.left + w->border_px;
             int tiw = (w->rect.right - w->rect.left) - 2 * w->border_px;
             int tw = tiw / w->ntabs;
@@ -387,7 +465,8 @@ void input_mouse(int sx, int sy, int button, int press, int motion)
     }
 
     int ix = w->rect.left + w->border_px;
-    int iy = w->rect.top + w->border_px + g_srv.title_h;
+    int title_h = w->titlebar ? g_srv.title_h : 0;
+    int iy = w->rect.top + w->border_px + title_h;
     int cx = sx - ix, cy = sy - iy;
     if (cx < 0 || cy < 0)   /* audit #4: clique na decoracao (borda/barra de titulo)
                              * NAO vira clique no conteudo (antes clampava p/ 0 e
@@ -408,7 +487,9 @@ void input_mouse(int sx, int sy, int button, int press, int motion)
                 return;
             last_hover = now;
         }
-        appsrv_input_mouse(w->id, cx, cy, buttons);
+        int axis = button == 64 ? 1 : (button == 65 ? -1 : 0);
+        appsrv_input_pointer(w->id, cx, cy, buttons, button,
+                             motion ? 2 : (press ? 1 : 0), axis);
     } else if (w->term) {
         int col = g_srv.cellw > 0 ? cx / g_srv.cellw : 0;
         int row = g_srv.cellh > 0 ? cy / g_srv.cellh : 0;

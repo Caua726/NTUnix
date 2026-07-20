@@ -58,6 +58,14 @@ int wm_read(char *buf, int cap)
 {
     if (g_pipe == INVALID_HANDLE_VALUE)
         return -1;
+    DWORD available = 0;
+    if (!PeekNamedPipe(g_pipe, NULL, 0, NULL, &available, NULL)) {
+        CloseHandle(g_pipe);
+        g_pipe = INVALID_HANDLE_VALUE;
+        return -1;
+    }
+    if (available == 0)
+        return 0;  /* loop principal pode drenar IPC sem bloquear no dispd */
     /* remonta fragmentos: uma mensagem maior que o buffer chega em varios
      * ReadFile com ERROR_MORE_DATA — sem juntar, viravam eventos falsos (#77) */
     int total = 0;

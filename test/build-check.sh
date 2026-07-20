@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # build-check.sh — valida a base de build da ISO SEM precisar de uma ISO
 # do Windows. Checa presenca de deps, sintaxe dos scripts, XML bem-formado,
-# a arvore staged (out/) e simula a fase de strip/inject do make-iso num
+# a arvore staged (out/) e simula a fase de strip/inject do make-live num
 # .wim sintetico. Complementa o smoke.sh (que testa o runtime).
 set -u
 cd "$(dirname "$0")/.."
@@ -12,7 +12,7 @@ skip() { echo "skip - $1"; SKIP=$((SKIP+1)); }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 echo "== arvore staged (out/) =="
-for b in initd ntctl logd demod ntsession; do
+for b in initd ntctl logd demod ntsession dispd ntwm ntbar ntwmctl; do
     if [ -f "out/system/bin/$b.exe" ]; then ok "binario $b.exe presente"
     else bad "binario $b.exe AUSENTE (rode make)"; fi
 done
@@ -28,19 +28,22 @@ if have x86_64-w64-mingw32-objdump; then
 else skip "objdump do mingw ausente"; fi
 
 echo "== sintaxe dos scripts =="
-for s in build/make-iso.sh build/test-vm.sh test/smoke.sh test/build-check.sh; do
+for s in build/make-live.sh build/test-vm.sh build/vm-setup.sh \
+         build/fetch-deps.sh test/build-check.sh test/desktop-check.sh; do
     bash -n "$s" && ok "bash -n $s" || bad "sintaxe $s"
 done
 
-echo "== SetupComplete.cmd sanidade =="
-grep -q 'Winlogon' build/SetupComplete.cmd && grep -q 'ntsession.exe' build/SetupComplete.cmd \
-    && ok "SetupComplete troca o Shell para ntsession" \
-    || bad "SetupComplete nao aponta o Shell para ntsession"
+echo "== shell NTUnix sanidade =="
+grep -q 'ntsession.exe' build/winpeshl.ini &&
+    grep -q 'CurrentVersion\\Winlogon' build/ntstrap.cmd &&
+    grep -q 'ntsession.exe' build/ntstrap.cmd \
+    && ok "WinPE e instalacao apontam para ntsession" \
+    || bad "configuracao de shell nao aponta para ntsession"
 
-echo "== autounattend.xml bem-formado =="
+echo "== unattend-oobe.xml bem-formado =="
 if have xmllint; then
-    xmllint --noout build/autounattend.xml 2>/dev/null \
-        && ok "autounattend.xml valido" || bad "autounattend.xml malformado"
+    xmllint --noout build/unattend-oobe.xml 2>/dev/null \
+        && ok "unattend-oobe.xml valido" || bad "unattend-oobe.xml malformado"
 else skip "xmllint ausente (pacote libxml2)"; fi
 
 echo "== strip.list nao remove itens perigosos =="

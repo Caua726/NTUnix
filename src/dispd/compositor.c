@@ -43,6 +43,22 @@ static void free_dib(HDC dc, HBITMAP bmp)
     if (bmp) DeleteObject(bmp);
 }
 
+static void window_defaults(Window *w)
+{
+    w->ws = g_srv.cur_ws;
+    w->visible = 1;
+    w->border_px = 2;
+    w->border_rgb = BORDER_NORMAL;
+    w->focus_rgb = BORDER_FOCUS;
+    w->opacity = 238;
+    w->shadow = 1;
+    w->corner_radius = 10;
+    w->animate = 1;
+    w->titlebar = 1;
+    w->scene_layer = SCENE_WINDOWS;
+    w->app_role = APP_ROLE_TOPLEVEL;
+}
+
 /* audit #85: recria o backbuffer no novo tamanho de tela (WM_DISPLAYCHANGE).
  * Cria o novo ANTES de soltar o antigo — se make_dib falhar, mantem o atual. */
 int compositor_resize(int w, int h)
@@ -67,6 +83,7 @@ int compositor_resize(int w, int h)
     g_srv.frame.stride = w * 4;
     if (g_srv.present && g_srv.present->resize)
         g_srv.present->resize(g_srv.present, w, h);
+    appsrv_reconfigure_layers();
     g_srv.dirty = 1;
     dispd_log("compositor: tela %dx%d", w, h);
     return 0;
@@ -128,10 +145,7 @@ Window *win_create(WinKind kind, int cw, int ch)
         return NULL;
     w->id = ++g_srv.next_id;
     w->kind = kind;
-    w->ws = g_srv.cur_ws;
-    w->visible = 1;
-    w->border_px = 2;
-    w->border_rgb = BORDER_NORMAL;
+    window_defaults(w);
     if (cw < 1) cw = g_srv.cellw * 80;
     if (ch < 1) ch = g_srv.cellh * 24;
     w->cw = cw;
@@ -146,7 +160,7 @@ Window *win_create(WinKind kind, int cw, int ch)
     FillRect(w->memdc, &rc, b);
     DeleteObject(b);
 
-    w->anim_ms = GetTickCount64();   /* #35: fade-in ao aparecer */
+    w->anim_ms = GetTickCount64();   /* fade-in ao aparecer */
     w->next = g_srv.windows;
     g_srv.windows = w;
     g_srv.dirty = 1;
@@ -164,13 +178,11 @@ Window *win_create_shared(int cw, int ch, HANDLE section)
         return NULL;
     w->id = ++g_srv.next_id;
     w->kind = WK_APP;
-    w->ws = g_srv.cur_ws;
-    w->visible = 1;
-    w->border_px = 2;
-    w->border_rgb = BORDER_NORMAL;
+    window_defaults(w);
     w->cw = cw;
     w->ch = ch;
     w->section = section;
+    w->anim_ms = GetTickCount64();
 
     BITMAPINFO bmi;
     ZeroMemory(&bmi, sizeof bmi);
@@ -200,6 +212,41 @@ Window *win_create_shared(int cw, int ch, HANDLE section)
     return w;
 }
 
+int win_replace_shared(Window *w, int cw, int ch, HANDLE section)
+{
+    if (!w || w->kind != WK_APP || !section || cw < 1 || ch < 1)
+        return -1;
+    BITMAPINFO bmi;
+    ZeroMemory(&bmi, sizeof bmi);
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = cw;
+    bmi.bmiHeader.biHeight = -ch;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+    HDC dc = CreateCompatibleDC(NULL);
+    void *bits = NULL;
+    HBITMAP dib = dc ? CreateDIBSection(dc, &bmi, DIB_RGB_COLORS,
+                                        &bits, section, 0) : NULL;
+    if (!dc || !dib) {
+        if (dc) DeleteDC(dc);
+        return -1;
+    }
+    SelectObject(dc, dib);
+    free_dib(w->memdc, w->dib);
+    if (w->section)
+        CloseHandle(w->section);
+    w->memdc = dc;
+    w->dib = dib;
+    w->bits = bits;
+    w->section = section;
+    w->cw = cw;
+    w->ch = ch;
+    w->dirty = 1;
+    g_srv.dirty = 1;
+    return 0;
+}
+
 /* WK_FOREIGN: janela nativa do Windows que a gente gerencia (sem DIB nosso —
  * o win32k desenha; so cuidamos da geometria/foco/borda) */
 Window *win_create_foreign(HWND hwnd)
@@ -209,11 +256,9 @@ Window *win_create_foreign(HWND hwnd)
         return NULL;
     w->id = ++g_srv.next_id;
     w->kind = WK_FOREIGN;
-    w->ws = g_srv.cur_ws;
-    w->visible = 1;
-    w->border_px = 2;
-    w->border_rgb = BORDER_NORMAL;
+    window_defaults(w);
     w->hwnd = hwnd;
+    w->animate = 0; /* Win32 recebe destino imediatamente; pixels nao sao compostos */
     w->next = g_srv.windows;
     g_srv.windows = w;
     g_srv.dirty = 1;
@@ -298,12 +343,80 @@ void win_set_client_size(Window *w, int cw, int ch)
     g_srv.dirty = 1;
 }
 
+static int rect_empty(const RECT *r)
+{
+    return r->right <= r->left || r->bottom <= r->top;
+}
+
+/* Atualiza o destino logico imediatamente e inicia apenas a geometria visual.
+ * Hit-test, foco, resize do cliente e WK_FOREIGN usam `rect`, nunca `visual`. */
+void win_set_logical_rect(Window *w, const RECT *goal)
+{
+    if (!w || !goal)
+        return;
+    RECT old = w->rect;
+    w->rect = *goal;
+    if (w->kind == WK_FOREIGN || g_srv.interactive_wid == w->id ||
+        !g_srv.animations || !w->animate) {
+        w->visual.begin = w->visual.current = w->visual.goal = *goal;
+        w->visual.active = 0;
+        g_srv.dirty = 1;
+        return;
+    }
+    RECT current = w->visual.current;
+    if (rect_empty(&current)) {
+        current = *goal;
+        current.top += 8;
+        current.bottom += 8;
+    } else if (rect_empty(&old)) {
+        current = *goal;
+    }
+    w->visual.begin = current;
+    w->visual.current = current;
+    w->visual.goal = *goal;
+    w->visual.start_ms = GetTickCount64();
+    w->visual.duration_ms = g_srv.move_ms > 0 ? g_srv.move_ms : 180;
+    w->visual.active = memcmp(&current, goal, sizeof current) != 0;
+    g_srv.dirty = 1;
+}
+
+int compositor_geometry_selftest(void)
+{
+    Window w;
+    ZeroMemory(&w, sizeof w);
+    w.id = 42;
+    w.kind = WK_APP;
+    w.animate = 1;
+    RECT old = { 10, 20, 210, 140 };
+    RECT goal = { 50, 70, 370, 250 };
+    w.rect = old;
+    w.visual.begin = w.visual.current = w.visual.goal = old;
+    g_srv.animations = 1;
+    g_srv.move_ms = 180;
+
+    g_srv.interactive_wid = w.id;
+    win_set_logical_rect(&w, &goal);
+    if (w.visual.active || memcmp(&w.visual.current, &goal, sizeof goal) ||
+        memcmp(&w.rect, &goal, sizeof goal))
+        return 1;
+
+    g_srv.interactive_wid = 0;
+    w.rect = old;
+    w.visual.begin = w.visual.current = w.visual.goal = old;
+    win_set_logical_rect(&w, &goal);
+    if (!w.visual.active || memcmp(&w.visual.current, &old, sizeof old) ||
+        memcmp(&w.visual.goal, &goal, sizeof goal))
+        return 2;
+    return 0;
+}
+
 void win_focus(Window *w)
 {
     /* audit #7: nao aceita foco em janela invisivel ou de outro workspace — o WM
      * pode mandar FOCUS de uma janela oculta ao remover a ultima do ws atual, e
      * o teclado iria pra uma janela que o usuario nao ve. Foco nulo nesse caso. */
-    if (w && (!w->visible || w->ws != g_srv.cur_ws))
+    if (w && (!w->visible ||
+              (w->scene_layer != SCENE_LAYERS && w->ws != g_srv.cur_ws)))
         w = NULL;
     if (g_srv.focused != w) {   /* #35: anima a transicao de borda (foco muda) */
         if (g_srv.focused) g_srv.focused->focus_ms = GetTickCount64();
@@ -326,7 +439,8 @@ Window *win_at_point(int x, int y)
 {
     Window *hit = NULL;
     for (Window *w = g_srv.windows; w; w = w->next) {
-        if (!w->visible || w->ws != g_srv.cur_ws)
+        if (!w->visible ||
+            (w->scene_layer != SCENE_LAYERS && w->ws != g_srv.cur_ws))
             continue;
         if (x >= w->rect.left && x < w->rect.right &&
             y >= w->rect.top && y < w->rect.bottom) {
@@ -335,6 +449,45 @@ Window *win_at_point(int x, int y)
         }
     }
     return hit;
+}
+
+void compositor_set_animations(int enabled, int move_ms, int open_ms,
+                               int workspace_ms, int focus_ms)
+{
+    g_srv.animations = enabled != 0;
+    g_srv.move_ms = move_ms < 0 ? 0 : (move_ms > 5000 ? 5000 : move_ms);
+    g_srv.open_ms = open_ms < 0 ? 0 : (open_ms > 5000 ? 5000 : open_ms);
+    g_srv.workspace_ms = workspace_ms < 0 ? 0 :
+                         (workspace_ms > 5000 ? 5000 : workspace_ms);
+    g_srv.focus_ms = focus_ms < 0 ? 0 : (focus_ms > 5000 ? 5000 : focus_ms);
+}
+
+void compositor_set_workspace(int ws)
+{
+    if (ws < 0 || ws >= NTUWM_WS || ws == g_srv.cur_ws)
+        return;
+    g_srv.old_ws = g_srv.cur_ws;
+    g_srv.workspace_anim_dir = ws > g_srv.cur_ws ? 1 : -1;
+    g_srv.cur_ws = ws; /* estado logico/input muda sem esperar a animacao */
+    if (g_srv.animations && g_srv.workspace_ms > 0)
+        g_srv.workspace_anim_ms = GetTickCount64();
+    else
+        g_srv.workspace_anim_ms = 0;
+    g_srv.dirty = 1;
+}
+
+void compositor_recompute_workarea(void)
+{
+    int top = 0;
+    for (Window *w = g_srv.windows; w; w = w->next)
+        if (w->visible && w->scene_layer == SCENE_LAYERS &&
+            (w->anchors & NTUAPP_ANCHOR_TOP) && w->exclusive_zone > top)
+            top = w->exclusive_zone;
+    if (top != g_srv.bar_h) {
+        g_srv.bar_h = top;
+        g_srv.dirty = 1;
+        wmproto_ev_output();
+    }
 }
 
 /* propaga titulo novo do terminal p/ a janela e emite evento (main thread) */
@@ -374,7 +527,7 @@ static int g_ws_x0[10], g_ws_x1[10];
 
 int bar_ws_at(int x, int y)
 {
-    if (y < 0 || y >= g_srv.bar_h)
+    if (!g_srv.internal_bar || y < 0 || y >= g_srv.bar_h)
         return -1;
     for (int i = 0; i < 9; i++)
         if (g_ws_x1[i] > g_ws_x0[i] && x >= g_ws_x0[i] && x < g_ws_x1[i])
@@ -457,19 +610,9 @@ static void draw_bar(void)
 /* ---- glass: wallpaper com gradiente + composicao translucida ---- */
 
 /* opacidade do conteudo (0..255); DISPD_OPACITY em % (default 92) */
-static int glass_opacity(void)
+static int glass_opacity(Window *w)
 {
-    static int op = -1;
-    if (op < 0) {
-        char v[8] = "";
-        GetEnvironmentVariableA("DISPD_OPACITY", v, sizeof v);
-        int pct = 85;
-        if (v[0]) { pct = 0; for (char *c = v; *c >= '0' && *c <= '9'; c++) pct = pct * 10 + (*c - '0'); }
-        if (pct < 40) pct = 40;
-        if (pct > 100) pct = 100;
-        op = pct * 255 / 100;
-    }
-    return op;
+    return w->opacity < 0 ? 0 : (w->opacity > 255 ? 255 : w->opacity);
 }
 
 /* ---- frosted glass: blur do fundo atras das janelas translucidas ----
@@ -484,7 +627,7 @@ static int blur_radius(void)
         if (v[0]) { r = atoi(v); if (r < 0) r = 0; if (r > 40) r = 40; }
         else r = 5;
     }
-    return r;
+    return g_srv.quality_level >= 1 ? 0 : r;
 }
 
 static unsigned char *g_blur_scratch;
@@ -543,40 +686,22 @@ static void wallpaper_bgr(int y, int H, unsigned char *bgr)
 }
 
 /* raio dos cantos arredondados; DISPD_ROUND=0 desliga (default 8) */
-static int corner_radius(void)
-{
-    static int r = -1;
-    if (r < 0) {
-        char v[8] = "";
-        GetEnvironmentVariableA("DISPD_ROUND", v, sizeof v);
-        if (v[0]) { r = atoi(v); if (r < 0) r = 0; if (r > 32) r = 32; }
-        else r = 8;
-    }
-    return r;
-}
-
 /* ---- animacoes (aparecer): fade-in por tempo (#35 modernizacao) ---- */
-#define ANIM_MS 160
 static int anim_enabled(void)
 {
-    static int en = -1;
-    if (en < 0) {
-        char v[8] = "";
-        GetEnvironmentVariableA("DISPD_ANIM", v, sizeof v);
-        en = (v[0] == '0') ? 0 : 1;
-    }
-    return en;
+    return g_srv.animations;
 }
 
 /* alpha (0..255) da animacao de aparecer da janela; 255 = pronta. Zera anim_ms
  * ao terminar (ease-out cubico). */
 static int win_anim_alpha(Window *w)
 {
-    if (!anim_enabled() || w->anim_ms == 0)
+    if (!anim_enabled() || !w->animate || w->anim_ms == 0 ||
+        g_srv.open_ms <= 0)
         return 255;
     ULONGLONG el = GetTickCount64() - w->anim_ms;
-    if (el >= ANIM_MS) { w->anim_ms = 0; return 255; }
-    int u = 255 - (int)(el * 255 / ANIM_MS);         /* 255 -> 0 */
+    if (el >= (ULONGLONG)g_srv.open_ms) { w->anim_ms = 0; return 255; }
+    int u = 255 - (int)(el * 255 / g_srv.open_ms);   /* 255 -> 0 */
     return 255 - (int)((long long)u * u * u / (255 * 255));  /* 1-(1-t)^3 */
 }
 
@@ -589,16 +714,70 @@ static COLORREF lerp_rgb(COLORREF a, COLORREF b, int t /*0..255*/)
 
 /* cor da borda com transicao de foco (#35): lerp entre a borda normal e a de
  * foco durante FOCUS_ANIM_MS apos a mudanca. Zera focus_ms ao terminar. */
-#define FOCUS_ANIM_MS 120
 static COLORREF border_color(Window *w)
 {
-    COLORREF target = w->focused ? BORDER_FOCUS : w->border_rgb;
-    if (!anim_enabled() || w->focus_ms == 0)
+    COLORREF target = w->focused ? w->focus_rgb : w->border_rgb;
+    if (!anim_enabled() || !w->animate || w->focus_ms == 0 ||
+        g_srv.focus_ms <= 0)
         return target;
     ULONGLONG el = GetTickCount64() - w->focus_ms;
-    if (el >= FOCUS_ANIM_MS) { w->focus_ms = 0; return target; }
-    COLORREF from = w->focused ? w->border_rgb : BORDER_FOCUS;
-    return lerp_rgb(from, target, (int)(el * 255 / FOCUS_ANIM_MS));
+    if (el >= (ULONGLONG)g_srv.focus_ms) { w->focus_ms = 0; return target; }
+    COLORREF from = w->focused ? w->border_rgb : w->focus_rgb;
+    return lerp_rgb(from, target, (int)(el * 255 / g_srv.focus_ms));
+}
+
+static LONG lerp_long(LONG a, LONG b, int t)
+{
+    return a + (LONG)(((long long)(b - a) * t) / 255);
+}
+
+/* Um tick atualiza todos os valores e conserva o goal logico separado. Damage
+ * velho+novo e coberto pelo full frame usado enquanto ha animacao ativa. */
+static void animation_tick(void)
+{
+    ULONGLONG now = GetTickCount64();
+    for (Window *w = g_srv.windows; w; w = w->next) {
+        AnimatedRect *a = &w->visual;
+        if (!a->active)
+            continue;
+        ULONGLONG elapsed = now - a->start_ms;
+        if (a->duration_ms <= 0 || elapsed >= (ULONGLONG)a->duration_ms) {
+            a->current = a->goal;
+            a->active = 0;
+            continue;
+        }
+        int linear = (int)(elapsed * 255 / a->duration_ms);
+        int inv = 255 - linear;
+        int eased = 255 - (int)((long long)inv * inv * inv / (255 * 255));
+        a->current.left = lerp_long(a->begin.left, a->goal.left, eased);
+        a->current.top = lerp_long(a->begin.top, a->goal.top, eased);
+        a->current.right = lerp_long(a->begin.right, a->goal.right, eased);
+        a->current.bottom = lerp_long(a->begin.bottom, a->goal.bottom, eased);
+    }
+    if (g_srv.workspace_anim_ms &&
+        now - g_srv.workspace_anim_ms >= (ULONGLONG)g_srv.workspace_ms)
+        g_srv.workspace_anim_ms = 0;
+}
+
+static RECT window_draw_rect(Window *w)
+{
+    RECT r = rect_empty(&w->visual.current) ? w->rect : w->visual.current;
+    if (w->scene_layer == SCENE_LAYERS || !g_srv.workspace_anim_ms)
+        return r;
+    ULONGLONG elapsed = GetTickCount64() - g_srv.workspace_anim_ms;
+    int t = g_srv.workspace_ms > 0
+        ? (int)(elapsed * 255 / g_srv.workspace_ms) : 255;
+    if (t > 255) t = 255;
+    int inv = 255 - t;
+    int eased = 255 - (int)((long long)inv * inv * inv / (255 * 255));
+    int offset = 0;
+    if (w->ws == g_srv.cur_ws)
+        offset = g_srv.workspace_anim_dir * g_srv.scr_w * (255 - eased) / 255;
+    else if (w->ws == g_srv.old_ws)
+        offset = -g_srv.workspace_anim_dir * g_srv.scr_w * eased / 255;
+    r.left += offset;
+    r.right += offset;
+    return r;
 }
 
 int compositor_animating(void)
@@ -609,8 +788,10 @@ int compositor_animating(void)
         return 1;
     if (!anim_enabled())
         return 0;
+    if (g_srv.workspace_anim_ms)
+        return 1;
     for (Window *w = g_srv.windows; w; w = w->next)
-        if (w->anim_ms != 0 || w->focus_ms != 0)
+        if (w->anim_ms != 0 || w->focus_ms != 0 || w->visual.active)
             return 1;
     return 0;
 }
@@ -704,12 +885,19 @@ static int collect_visible(Window **vis, int cap)
 {
     int nv = 0;
     for (Window *w = g_srv.windows; w && nv < cap; w = w->next)
-        if (w->visible && w->ws == g_srv.cur_ws)
+        if (w->visible &&
+            (w->scene_layer == SCENE_LAYERS || w->ws == g_srv.cur_ws ||
+             (g_srv.workspace_anim_ms && w->ws == g_srv.old_ws)))
             vis[nv++] = w;
     for (int i = 1; i < nv; i++) {
         Window *k = vis[i];
         int j = i - 1;
-        while (j >= 0 && vis[j]->z > k->z) { vis[j + 1] = vis[j]; j--; }
+        while (j >= 0 &&
+               (vis[j]->scene_layer > k->scene_layer ||
+                (vis[j]->scene_layer == k->scene_layer && vis[j]->z > k->z))) {
+            vis[j + 1] = vis[j];
+            j--;
+        }
         vis[j + 1] = k;
     }
     return nv;
@@ -719,7 +907,8 @@ static int collect_visible(Window **vis, int cap)
  * `clip` (o retangulo de damage; NULL = sem limite). Opacidade cheia -> BitBlt
  * opaco (rapido). O src e' amostrado em (px-dx, py-dy). */
 static void blit_glass(HDC memdc, const void *sbits, int sw,
-                       int dx, int dy, int bw, int bh, const RECT *clip, int amul)
+                       int dx, int dy, int bw, int bh, const RECT *clip,
+                       int amul, int opacity)
 {
     int W = g_srv.scr_w, H = g_srv.scr_h;
     int x0 = dx, y0 = dy, x1 = dx + bw, y1 = dy + bh;
@@ -736,7 +925,7 @@ static void blit_glass(HDC memdc, const void *sbits, int sw,
     if (x0 >= x1 || y0 >= y1)
         return;
 
-    int a = glass_opacity();
+    int a = opacity;
     if (amul < 255) a = a * amul / 255;   /* #35: fade de aparecer (amul<255) */
     if (a >= 255) {   /* opaco: BitBlt so a interseccao */
         BitBlt(g_srv.cdc, x0, y0, x1 - x0, y1 - y0, memdc, x0 - dx, y0 - dy, SRCCOPY);
@@ -768,13 +957,103 @@ static void blit_glass(HDC memdc, const void *sbits, int sw,
     }
 }
 
+/* BGRA premultiplicado: out = src + dst*(1-a). Usado pelo app protocol v2. */
+static void blit_premultiplied(const void *sbits, int sw, int dx, int dy,
+                               int bw, int bh, const RECT *clip, int opacity)
+{
+    unsigned char *dst = (unsigned char *)g_srv.cbits;
+    const unsigned char *src = (const unsigned char *)sbits;
+    if (!dst || !src)
+        return;
+    int x0 = dx, y0 = dy, x1 = dx + bw, y1 = dy + bh;
+    if (clip) {
+        if (x0 < clip->left) x0 = clip->left;
+        if (y0 < clip->top) y0 = clip->top;
+        if (x1 > clip->right) x1 = clip->right;
+        if (y1 > clip->bottom) y1 = clip->bottom;
+    }
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > g_srv.scr_w) x1 = g_srv.scr_w;
+    if (y1 > g_srv.scr_h) y1 = g_srv.scr_h;
+    for (int y = y0; y < y1; y++) {
+        unsigned char *drow = dst + (size_t)y * g_srv.frame.stride;
+        const unsigned char *srow = src + (size_t)(y - dy) * sw * 4;
+        for (int x = x0; x < x1; x++) {
+            unsigned char *d = drow + x * 4;
+            const unsigned char *s = srow + (x - dx) * 4;
+            int a = s[3] * opacity / 255;
+            int ia = 255 - a;
+            int sb = s[0] * opacity / 255;
+            int sg = s[1] * opacity / 255;
+            int sr = s[2] * opacity / 255;
+            d[0] = (unsigned char)(sb + (d[0] * ia + 127) / 255);
+            d[1] = (unsigned char)(sg + (d[1] * ia + 127) / 255);
+            d[2] = (unsigned char)(sr + (d[2] * ia + 127) / 255);
+            d[3] = 255;
+        }
+    }
+}
+
+/* Mascara 1D cacheada por raio. Evita recalcular o falloff da sombra por
+ * pixel/frame; qualidade adaptativa reduz raio/softness antes de tocar layout. */
+static unsigned char g_shadow_mask[33][33];
+static unsigned char g_shadow_ready[33];
+
+static unsigned char *shadow_mask(int radius)
+{
+    if (radius < 1) radius = 1;
+    if (radius > 32) radius = 32;
+    if (!g_shadow_ready[radius]) {
+        for (int i = 0; i <= radius; i++) {
+            int inv = radius - i;
+            g_shadow_mask[radius][i] =
+                (unsigned char)(70 * inv * inv / (radius * radius));
+        }
+        g_shadow_ready[radius] = 1;
+    }
+    return g_shadow_mask[radius];
+}
+
+static void draw_shadow(const RECT *r, const RECT *clip, int enabled)
+{
+    if (!enabled || g_srv.quality_level >= 3 || !g_srv.cbits)
+        return;
+    int radius = g_srv.quality_level >= 2 ? 4 : 12;
+    unsigned char *mask = shadow_mask(radius);
+    unsigned char *dst = (unsigned char *)g_srv.cbits;
+    for (int y = r->top - radius; y < r->bottom + radius; y++) {
+        if (y < 0 || y >= g_srv.scr_h ||
+            (clip && (y < clip->top || y >= clip->bottom)))
+            continue;
+        for (int x = r->left - radius; x < r->right + radius; x++) {
+            if (x < 0 || x >= g_srv.scr_w ||
+                (clip && (x < clip->left || x >= clip->right)) ||
+                (x >= r->left && x < r->right && y >= r->top && y < r->bottom))
+                continue;
+            int dx = x < r->left ? r->left - x : (x >= r->right ? x - r->right + 1 : 0);
+            int dy = y < r->top ? r->top - y : (y >= r->bottom ? y - r->bottom + 1 : 0);
+            int d = dx > dy ? dx : dy;
+            if (d > radius) continue;
+            int a = mask[d];
+            unsigned char *p = dst + (size_t)y * g_srv.frame.stride + x * 4;
+            p[0] = (unsigned char)(p[0] * (255 - a) / 255);
+            p[1] = (unsigned char)(p[1] * (255 - a) / 255);
+            p[2] = (unsigned char)(p[2] * (255 - a) / 255);
+        }
+    }
+}
+
 /* compoe UMA janela (borda + barra de abas + conteudo) dentro de `clip`. As
  * operacoes GDI ja saem clipadas pela regiao selecionada no cdc; o blit_glass
  * (loop de pixel manual) recebe o clip explicito. */
 static void compose_one_window(Window *w, const RECT *clip)
 {
+    RECT vr = window_draw_rect(w);
     if (w->kind == WK_TERM && w->term && w->term->dirty)
         vt_render(w->term, w->memdc, g_srv.font, g_srv.cellw, g_srv.cellh);
+
+    draw_shadow(&vr, clip, w->shadow && w->scene_layer == SCENE_WINDOWS);
 
     /* borda: MOLDURA (nao preenche o miolo -> o wallpaper aparece sob o
      * glass do terminal). foco = destaque */
@@ -782,21 +1061,22 @@ static void compose_one_window(Window *w, const RECT *clip)
     HBRUSH bb = CreateSolidBrush(bc);
     int bp = w->border_px;
     RECT edges[4] = {
-        { w->rect.left, w->rect.top, w->rect.right, w->rect.top + bp },
-        { w->rect.left, w->rect.bottom - bp, w->rect.right, w->rect.bottom },
-        { w->rect.left, w->rect.top, w->rect.left + bp, w->rect.bottom },
-        { w->rect.right - bp, w->rect.top, w->rect.right, w->rect.bottom },
+        { vr.left, vr.top, vr.right, vr.top + bp },
+        { vr.left, vr.bottom - bp, vr.right, vr.bottom },
+        { vr.left, vr.top, vr.left + bp, vr.bottom },
+        { vr.right - bp, vr.top, vr.right, vr.bottom },
     };
     for (int e = 0; e < 4; e++)
         FillRect(g_srv.cdc, &edges[e], bb);
     DeleteObject(bb);
 
-    int ix = w->rect.left + w->border_px;
-    int iy = w->rect.top + w->border_px;
-    int iw = (w->rect.right - w->rect.left) - 2 * w->border_px;
+    int ix = vr.left + w->border_px;
+    int iy = vr.top + w->border_px;
+    int iw = (vr.right - vr.left) - 2 * w->border_px;
+    int title_h = w->titlebar ? g_srv.title_h : 0;
 
     /* barra de ABAS do terminal (i3-ish); barra de titulo simples p/ apps */
-    if (g_srv.title_h > 0 && iw > 0) {
+    if (title_h > 0 && iw > 0) {
         SelectObject(g_srv.cdc, g_srv.font);
         SetBkMode(g_srv.cdc, TRANSPARENT);
         if (w->kind == WK_TERM && w->ntabs > 0) {
@@ -806,7 +1086,7 @@ static void compose_one_window(Window *w, const RECT *clip)
                 int tx = ix + ti * tw;
                 int twid = (ti == w->ntabs - 1) ? (ix + iw - tx) : tw;
                 int act = (ti == w->active_tab);
-                RECT tb = { tx, iy, tx + twid, iy + g_srv.title_h };
+                RECT tb = { tx, iy, tx + twid, iy + title_h };
                 COLORREF tc = act ? (w->focused ? BORDER_FOCUS : RGB(70, 70, 84))
                                   : RGB(30, 30, 38);
                 HBRUSH tbb = CreateSolidBrush(tc);
@@ -829,12 +1109,12 @@ static void compose_one_window(Window *w, const RECT *clip)
                 SetTextColor(g_srv.cdc, act
                     ? (w->focused ? RGB(12, 14, 20) : RGB(225, 225, 235))
                     : RGB(150, 150, 165));
-                RECT tr = { tx + 4, iy, tx + twid - 4, iy + g_srv.title_h };
+                RECT tr = { tx + 4, iy, tx + twid - 4, iy + title_h };
                 draw_text_utf8(g_srv.cdc, lbl, &tr,
                                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
             }
         } else {
-            RECT tb = { ix, iy, ix + iw, iy + g_srv.title_h };
+            RECT tb = { ix, iy, ix + iw, iy + title_h };
             COLORREF tc = w->focused ? BORDER_FOCUS : RGB(44, 44, 52);
             HBRUSH tbb = CreateSolidBrush(tc);
             FillRect(g_srv.cdc, &tb, tbb);
@@ -842,7 +1122,7 @@ static void compose_one_window(Window *w, const RECT *clip)
             SetTextColor(g_srv.cdc, w->focused ? RGB(12, 14, 20)
                                                : RGB(180, 180, 195));
             const char *base = w->title[0] ? w->title : "app";
-            RECT tr = { ix + 6, iy, ix + iw - 6, iy + g_srv.title_h };
+            RECT tr = { ix + 6, iy, ix + iw - 6, iy + title_h };
             draw_text_utf8(g_srv.cdc, base, &tr,
                            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         }
@@ -851,22 +1131,28 @@ static void compose_one_window(Window *w, const RECT *clip)
     /* conteudo (terminal/app) abaixo da barra de titulo, SEMPRE clipado a
      * area cliente: uma surface de app maior que o tile nao pode invadir a
      * janela vizinha nem sobrar fundo de borda (#49) */
-    int ih = (w->rect.bottom - w->rect.top) - 2 * w->border_px - g_srv.title_h;
+    int ih = (vr.bottom - vr.top) - 2 * w->border_px - title_h;
     int bw = w->cw < iw ? w->cw : iw;
     int bh = w->ch < ih ? w->ch : ih;
     if (bw > 0 && bh > 0) {
         if (w->kind == WK_TERM)          /* glass: terminal translucido */
-            blit_glass(w->memdc, w->bits, w->cw, ix, iy + g_srv.title_h, bw, bh, clip,
-                       win_anim_alpha(w));   /* #35: fade-in ao aparecer */
-        else                              /* app: superficie opaca (GDI clipa) */
-            BitBlt(g_srv.cdc, ix, iy + g_srv.title_h, bw, bh, w->memdc, 0, 0, SRCCOPY);
+            blit_glass(w->memdc, w->bits, w->cw, ix, iy + title_h, bw, bh, clip,
+                       win_anim_alpha(w), glass_opacity(w));
+        else if (w->premultiplied)
+            blit_premultiplied(w->bits, w->cw, ix, iy + title_h, bw, bh,
+                               clip, w->opacity);
+        else if (w->opacity < 255)
+            blit_glass(w->memdc, w->bits, w->cw, ix, iy + title_h, bw, bh,
+                       clip, win_anim_alpha(w), w->opacity);
+        else
+            BitBlt(g_srv.cdc, ix, iy + title_h, bw, bh, w->memdc, 0, 0, SRCCOPY);
     }
 
     /* cantos arredondados: recorta a moldura DEPOIS de tudo desenhado (garante
      * que o GDI da borda chegou ao DIB antes de sobrescrever os cantos) */
-    if (corner_radius() > 0) {
+    if (w->corner_radius > 0) {
         GdiFlush();
-        round_corners(&w->rect, corner_radius(), clip);
+        round_corners(&vr, w->corner_radius, clip);
     }
 }
 
@@ -879,11 +1165,11 @@ static void compose_one_window(Window *w, const RECT *clip)
  * o caso de um app opaco cobrindo outra janela. */
 static int win_opaque(Window *w)
 {
-    if (corner_radius() > 0 || w->anim_ms != 0)
+    if (w->corner_radius > 0 || w->anim_ms != 0 || w->opacity < 255)
         return 0;
-    if (w->kind == WK_APP)
+    if (w->kind == WK_APP && !w->premultiplied)
         return 1;
-    return w->kind == WK_TERM && glass_opacity() >= 255;
+    return w->kind == WK_TERM && glass_opacity(w) >= 255;
 }
 
 static int rect_contains(const RECT *a, const RECT *b)
@@ -902,18 +1188,21 @@ static void compose_region(const RECT *r)
     Window *vis[256];
     int nv = collect_visible(vis, 256);
     for (int i = 0; i < nv; i++) {
-        if (!rects_hit(&vis[i]->rect, r))
+        RECT ir = window_draw_rect(vis[i]);
+        if (!rects_hit(&ir, r))
             continue;
         int occluded = 0;   /* pula se uma janela OPACA acima cobre esta inteira */
-        for (int j = i + 1; j < nv && !occluded; j++)
-            if (win_opaque(vis[j]) && rect_contains(&vis[j]->rect, &vis[i]->rect))
+        for (int j = i + 1; j < nv && !occluded; j++) {
+            RECT jr = window_draw_rect(vis[j]);
+            if (win_opaque(vis[j]) && rect_contains(&jr, &ir))
                 occluded = 1;
+        }
         if (!occluded)
             compose_one_window(vis[i], r);
     }
 
     RECT bar = { 0, 0, g_srv.scr_w, g_srv.bar_h };
-    if (g_srv.bar_h > 0 && rects_hit(&bar, r))
+    if (g_srv.internal_bar && g_srv.bar_h > 0 && rects_hit(&bar, r))
         draw_bar();
 
     SelectClipRgn(g_srv.cdc, NULL);
@@ -1036,6 +1325,8 @@ static void present_frame(const RECT *sub)
 
 void compose_and_present(void)
 {
+    ULONGLONG compose_start = GetTickCount64();
+    animation_tick();
     /* propaga titulos de todas as visiveis (eventos independem do damage) */
     for (Window *w = g_srv.windows; w; w = w->next)
         if (w->visible && w->ws == g_srv.cur_ws)
@@ -1051,6 +1342,25 @@ void compose_and_present(void)
         present_frame(NULL);
         g_srv.dirty = 0;
         g_srv.bar_dirty = 0;
+        ULONGLONG elapsed = GetTickCount64() - compose_start;
+        static int good_frames;
+        if (elapsed > 18) {
+            good_frames = 0;
+            if (++g_srv.slow_frames >= 8 && g_srv.quality_level < 3) {
+                g_srv.quality_level++;
+                g_srv.slow_frames = 0;
+                dispd_log("compositor: qualidade adaptativa -> nivel %d",
+                          g_srv.quality_level);
+            }
+        } else {
+            if (g_srv.slow_frames > 0) g_srv.slow_frames--;
+            if (++good_frames >= 240 && g_srv.quality_level > 0) {
+                g_srv.quality_level--;
+                good_frames = 0;
+                dispd_log("compositor: qualidade adaptativa recuperada -> nivel %d",
+                          g_srv.quality_level);
+            }
+        }
         return;
     }
 
@@ -1062,8 +1372,8 @@ void compose_and_present(void)
     for (Window *w = g_srv.windows; w && nd < 256; w = w->next)
         if (w->visible && w->ws == g_srv.cur_ws &&
             w->kind == WK_TERM && w->term && w->term->dirty)
-            dmg[nd++] = w->rect;
-    if (g_srv.bar_dirty && g_srv.bar_h > 0) {
+            dmg[nd++] = window_draw_rect(w);
+    if (g_srv.internal_bar && g_srv.bar_dirty && g_srv.bar_h > 0) {
         RECT bar = { 0, 0, g_srv.scr_w, g_srv.bar_h };
         dmg[nd++] = bar;
     }

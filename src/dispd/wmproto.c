@@ -44,14 +44,35 @@ static CRITICAL_SECTION g_qlock;
 /* tabela de grabs (so tocada pelo main thread) */
 static struct { unsigned mods, vk; } g_grabs[GRABCAP];
 static int g_ngrabs;
+static struct { unsigned mods, vk; } g_pending_grabs[GRABCAP];
+static int g_npending_grabs;
+static int g_grab_buffering;
+static unsigned g_pointer_mod;
+static unsigned g_pending_pointer_mod;
 
 /* buffer da transacao de layout (main thread) */
 static char *g_frame[FRAMECAP];
 static int g_nframe;
 static int g_frame_failed;   /* quadro perdeu comando (overflow/OOM) -> nao commita (#44,#45) */
 static int g_buffering;
+static unsigned g_frame_serial;
 
 static int g_hello;                    /* ja recebeu HELLO valido? (main thread) */
+static int g_proto_ver;
+
+/* Layer surfaces pertencem ao compositor, nao ao window manager. Esta
+ * fronteira tambem precisa valer para snapshots e comandos recebidos: se o
+ * ntwm conecta depois do ntbar, a barra nao pode aparecer como cliente tiled. */
+static int wm_manages(const Window *w)
+{
+    return w && w->scene_layer == SCENE_WINDOWS;
+}
+
+static Window *wm_window(unsigned id)
+{
+    Window *w = win_find(id);
+    return wm_manages(w) ? w : NULL;
+}
 
 /* ---- fila ---- */
 
@@ -132,6 +153,8 @@ int wmproto_connected(void)
 
 void wmproto_ev_created(Window *w)
 {
+    if (!wm_manages(w))
+        return;
     char b[512];
     snprintf(b, sizeof b, "%s %u %d %lu %s", EVT_CREATED, w->id,
              (int)w->kind, w->pid, w->title[0] ? w->title : "terminal");
@@ -147,6 +170,8 @@ void wmproto_ev_destroyed(unsigned id)
 
 void wmproto_ev_title(Window *w)
 {
+    if (!wm_manages(w))
+        return;
     char b[512];
     snprintf(b, sizeof b, "%s %u %s", EVT_TITLE, w->id, w->title);
     wm_send(b);
@@ -155,7 +180,8 @@ void wmproto_ev_title(Window *w)
 void wmproto_ev_focused(Window *w)
 {
     char b[64];
-    snprintf(b, sizeof b, "%s %u", EVT_FOCUSED, w ? w->id : 0);
+    snprintf(b, sizeof b, "%s %u", EVT_FOCUSED,
+             wm_manages(w) ? w->id : 0);
     wm_send(b);
 }
 
@@ -172,6 +198,11 @@ int wmproto_grabbed(unsigned mods, unsigned vk)
         if (g_grabs[i].mods == mods && g_grabs[i].vk == vk)
             return 1;
     return 0;
+}
+
+unsigned wmproto_pointer_mod(void)
+{
+    return g_pointer_mod;
 }
 
 static void grab_add(unsigned mods, unsigned vk)
@@ -198,6 +229,7 @@ static void grab_del(unsigned mods, unsigned vk)
 void wmproto_ev_output(void)
 {
     char b[128];
+    wm_send(EVT_CONFIGURE);
     snprintf(b, sizeof b, "%s 0 0 %d %d %d", EVT_OUTPUT, g_srv.bar_h,
              g_srv.scr_w, g_srv.scr_h - g_srv.bar_h);
     wm_send(b);
@@ -217,15 +249,28 @@ void wmproto_ev_wsreq(int ws)
  * passa a declara-la (em vez da cascata) nos proximos frames. */
 void wmproto_ev_moved(unsigned id, int x, int y, int w, int h)
 {
+    if (!wm_window(id))
+        return;
     char b[64];
     snprintf(b, sizeof b, "%s %u %d %d %d %d", EVT_MOVED, id, x, y, w, h);
+    wm_send(b);
+}
+
+void wmproto_ev_pointer(unsigned id, int x, int y, int button,
+                        int state, unsigned mods)
+{
+    if (!wm_window(id))
+        return;
+    char b[96];
+    snprintf(b, sizeof b, "%s %u %d %d %d %d %x", EVT_POINTER,
+             id, x, y, button, state, mods);
     wm_send(b);
 }
 
 static void send_snapshot(void)
 {
     char b[512];
-    snprintf(b, sizeof b, "%s dispd %d %s", EVT_WELCOME, NTUWM_PROTO_VER, ntu_root());
+    snprintf(b, sizeof b, "%s dispd %d %s", EVT_WELCOME, g_proto_ver, ntu_root());
     wm_send(b);
     snprintf(b, sizeof b, "%s 0 0 %d %d %d", EVT_OUTPUT, g_srv.bar_h,
              g_srv.scr_w, g_srv.scr_h - g_srv.bar_h);
@@ -239,18 +284,34 @@ static void send_snapshot(void)
     Window *arr[NTU_MAX_WINDOWS];
     int nw = 0;
     Window *cw = g_srv.windows;
-    for (; cw && nw < NTU_MAX_WINDOWS; cw = cw->next)
+    for (; cw; cw = cw->next) {
+        if (!wm_manages(cw))
+            continue;
+        if (nw >= NTU_MAX_WINDOWS)
+            break;
         arr[nw++] = cw;
+    }
     if (cw)   /* audit #51: estourou o cap -> o WM nao veria as extras; loga */
         dispd_log("wmproto: snapshot truncado em %d janelas (cap NTU_MAX_WINDOWS)", nw);
     for (int i = nw - 1; i >= 0; i--) {
         Window *w = arr[i];
-        snprintf(b, sizeof b, "%s %u %d %lu %d %d %s", EVT_WINDOW, w->id,
-                 (int)w->kind, w->pid, w->ws, w->floating,
-                 w->title[0] ? w->title : (w->kind == WK_TERM ? "terminal" : "app"));
+        if (g_proto_ver >= 2) {
+            unsigned flags = (w->floating ? NTUWM_STATE_FLOATING : 0) |
+                             (w->fullscreen ? NTUWM_STATE_FULLSCREEN : 0) |
+                             (w->maximized ? NTUWM_STATE_MAXIMIZED : 0);
+            snprintf(b, sizeof b, "%s %u %d %lu %d %u %s", EVT_WINDOW_V2,
+                     w->id, (int)w->kind, w->pid, w->ws, flags,
+                     w->title[0] ? w->title :
+                     (w->kind == WK_TERM ? "terminal" : "app"));
+        } else {
+            snprintf(b, sizeof b, "%s %u %d %lu %d %d %s", EVT_WINDOW, w->id,
+                     (int)w->kind, w->pid, w->ws, w->floating,
+                     w->title[0] ? w->title :
+                     (w->kind == WK_TERM ? "terminal" : "app"));
+        }
         wm_send(b);
     }
-    if (g_srv.focused)
+    if (wm_manages(g_srv.focused))
         snprintf(b, sizeof b, "%s %u", EVT_FOCUSED, g_srv.focused->id);
     else
         snprintf(b, sizeof b, "%s 0", EVT_FOCUSED);   /* sempre manda foco (#19) */
@@ -262,6 +323,15 @@ static void send_snapshot(void)
 
 static void apply_now(char *line)
 {
+    size_t nl = strlen(CMD_NOTIFY);
+    if (!strncmp(line, CMD_NOTIFY, nl) &&
+        (line[nl] == 0 || line[nl] == ' ' || line[nl] == '\t')) {
+        const char *p = line + nl;
+        while (*p == ' ' || *p == '\t') p++;
+        dispd_log("ntwm: %s", p);
+        dispd_toast("%s", p);
+        return;
+    }
     /* SPAWN-TERM: cmdline pode ter espacos -> trata antes do split destrutivo */
     size_t sl = strlen(CMD_SPAWN);
     if (!strncmp(line, CMD_SPAWN, sl) && (line[sl] == 0 || line[sl] == ' ')) {
@@ -278,7 +348,7 @@ static void apply_now(char *line)
     const char *v = av[0];
 
     if (!strcmp(v, CMD_PLACE) && n >= 8) {
-        Window *w = win_find((unsigned)strtoul(av[1], NULL, 10));
+        Window *w = wm_window((unsigned)strtoul(av[1], NULL, 10));
         if (w) {
             /* parse largo + clamp: origem/tamanho de um WM malformado nao podem
              * estourar o RECT (int) na soma x+ww (#42). */
@@ -293,8 +363,8 @@ static void apply_now(char *line)
             if (y < -ylim) y = -ylim; else if (y > ylim) y = ylim;
             int ws = atoi(av[6]);
             if (ws < 0 || ws >= NTUWM_WS) ws = w->ws;               /* valida ws (#43) */
-            w->rect.left = (int)x; w->rect.top = (int)y;
-            w->rect.right = (int)(x + ww); w->rect.bottom = (int)(y + hh);
+            RECT goal = { (int)x, (int)y, (int)(x + ww), (int)(y + hh) };
+            win_set_logical_rect(w, &goal);
             w->ws = ws;
             w->z = atoi(av[7]);
             int b = w->border_px;
@@ -305,13 +375,13 @@ static void apply_now(char *line)
                 win_set_client_size(w, (int)ww - 2 * b, (int)hh - 2 * b - g_srv.title_h);
         }
     } else if (!strcmp(v, CMD_FOCUS) && n >= 2) {
-        win_focus(win_find((unsigned)strtoul(av[1], NULL, 10)));  /* 0 -> NULL */
+        win_focus(wm_window((unsigned)strtoul(av[1], NULL, 10))); /* 0 -> NULL */
     } else if (!strcmp(v, CMD_WORKSPACE) && n >= 2) {
         int ws = atoi(av[1]);
         if (ws >= 0 && ws < NTUWM_WS)
-            g_srv.cur_ws = ws;
+            compositor_set_workspace(ws);
     } else if (!strcmp(v, CMD_BORDER) && n >= 4) {
-        Window *w = win_find((unsigned)strtoul(av[1], NULL, 10));
+        Window *w = wm_window((unsigned)strtoul(av[1], NULL, 10));
         if (w) {
             int px = atoi(av[2]);
             w->border_px = (px < 0) ? 0 : (px > 32 ? 32 : px);
@@ -319,16 +389,60 @@ static void apply_now(char *line)
             w->border_rgb = RGB((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff);
         }
     } else if (!strcmp(v, CMD_SETWS) && n >= 3) {
-        Window *w = win_find((unsigned)strtoul(av[1], NULL, 10));
+        Window *w = wm_window((unsigned)strtoul(av[1], NULL, 10));
         int ws = atoi(av[2]);                       /* muda ws sem redimensionar (#28) */
         if (w && ws >= 0 && ws < NTUWM_WS) w->ws = ws;
     } else if (!strcmp(v, CMD_FLOAT) && n >= 3) {
-        Window *w = win_find((unsigned)strtoul(av[1], NULL, 10));
+        Window *w = wm_window((unsigned)strtoul(av[1], NULL, 10));
         if (w) w->floating = atoi(av[2]) ? 1 : 0;   /* persiste p/ restart (#33) */
+    } else if (!strcmp(v, CMD_STATE) && n >= 5) {
+        Window *w = wm_window((unsigned)strtoul(av[1], NULL, 10));
+        if (w) {
+            w->floating = atoi(av[2]) != 0;
+            w->fullscreen = atoi(av[3]) != 0;
+            w->maximized = atoi(av[4]) != 0;
+        }
+    } else if (!strcmp(v, CMD_STYLE) && n >= 9) {
+        Window *w = wm_window((unsigned)strtoul(av[1], NULL, 10));
+        if (w) {
+            int border = atoi(av[2]);
+            if (border < 0) border = 0;
+            if (border > 32) border = 32;
+            w->border_px = border;
+            unsigned long rgb = strtoul(av[3], NULL, 16);
+            w->focus_rgb = RGB((rgb >> 16) & 0xff,
+                               (rgb >> 8) & 0xff, rgb & 0xff);
+            w->opacity = atoi(av[4]);
+            if (w->opacity < 0) w->opacity = 0;
+            if (w->opacity > 255) w->opacity = 255;
+            w->shadow = atoi(av[5]) != 0;
+            w->corner_radius = atoi(av[6]);
+            if (w->corner_radius < 0) w->corner_radius = 0;
+            if (w->corner_radius > 64) w->corner_radius = 64;
+            w->animate = atoi(av[7]) != 0;
+            w->titlebar = atoi(av[8]) != 0;
+        }
+    } else if (!strcmp(v, CMD_ANIMATIONS) && n >= 6) {
+        compositor_set_animations(atoi(av[1]), atoi(av[2]), atoi(av[3]),
+                                  atoi(av[4]), atoi(av[5]));
     } else if (!strcmp(v, CMD_CLOSE) && n >= 2) {
-        dispd_close_window(win_find((unsigned)strtoul(av[1], NULL, 10)));   /* #3/#54 */
+        dispd_close_window(wm_window((unsigned)strtoul(av[1], NULL, 10)));  /* #3/#54 */
     } else if (!strcmp(v, CMD_GRAB) && n >= 3) {
-        grab_add((unsigned)strtoul(av[1], NULL, 16), (unsigned)strtoul(av[2], NULL, 16));
+        unsigned mods = (unsigned)strtoul(av[1], NULL, 16);
+        unsigned vk = (unsigned)strtoul(av[2], NULL, 16);
+        if (g_grab_buffering) {
+            int duplicate = 0;
+            for (int i = 0; i < g_npending_grabs; i++)
+                duplicate |= g_pending_grabs[i].mods == mods &&
+                             g_pending_grabs[i].vk == vk;
+            if (!duplicate && g_npending_grabs < GRABCAP) {
+                g_pending_grabs[g_npending_grabs].mods = mods;
+                g_pending_grabs[g_npending_grabs].vk = vk;
+                g_npending_grabs++;
+            }
+        } else {
+            grab_add(mods, vk);
+        }
     } else if (!strcmp(v, CMD_UNGRAB) && n >= 3) {
         grab_del((unsigned)strtoul(av[1], NULL, 16), (unsigned)strtoul(av[2], NULL, 16));
     } else if (!strcmp(v, CMD_QUIT)) {
@@ -363,7 +477,7 @@ static void frame_push(const char *line)
     g_frame[g_nframe++] = dup;
 }
 
-static void frame_commit(void)
+static int frame_commit(void)
 {
     /* audit #44 (critico)/#45: um quadro que perdeu QUALQUER comando (overflow
      * do FRAMECAP ou OOM no _strdup) NAO pode ser publicado pela metade —
@@ -372,17 +486,19 @@ static void frame_commit(void)
         dispd_log("wmproto: quadro incompleto (overflow/OOM) descartado — RESYNC");
         frame_clear();
         InterlockedExchange(&g_overflow, 1);   /* forca RESYNC no proximo drain */
-        return;
+        return 0;
     }
     for (int i = 0; i < g_nframe; i++)
         apply_now(g_frame[i]);   /* swap atomico: aplica o quadro inteiro de uma vez */
     frame_clear();
+    return 1;
 }
 
 void wmproto_abort_frame(void)   /* frame travado: DESCARTA, nao publica parcial (#30) */
 {
     frame_clear();
     g_buffering = 0;
+    g_frame_serial = 0;
     g_srv.in_frame = 0;
     g_srv.dirty = 1;             /* garante repaint apos abortar (#31) */
 }
@@ -392,7 +508,8 @@ static int is_frame_verb(const char *v)
     return !strcmp(v, CMD_PLACE) || !strcmp(v, CMD_FOCUS) ||
            !strcmp(v, CMD_WORKSPACE) || !strcmp(v, CMD_SETWS) ||
            !strcmp(v, CMD_BORDER) || !strcmp(v, CMD_FLOAT) ||
-           !strcmp(v, CMD_TITLEBAR);
+           !strcmp(v, CMD_TITLEBAR) || !strcmp(v, CMD_STATE) ||
+           !strcmp(v, CMD_STYLE) || !strcmp(v, CMD_ANIMATIONS);
 }
 
 /* dispatcher: controla a transacao e decide bufferizar ou aplicar direto */
@@ -410,9 +527,10 @@ static void apply(char *line)
         char *av[4];
         int n = ntuwm_split(line, av, 4, -1);
         int ver = n >= 3 ? atoi(av[2]) : 0;
-        if (ver != NTUWM_PROTO_VER) {               /* valida versao (#65) */
+        if (ver < NTUWM_PROTO_MIN || ver > NTUWM_PROTO_VER) {
             wm_write(EVT_ERR " versao-incompativel");   /* audit #54: ERR mesmo sem conectar */
-            dispd_log("wmproto: HELLO com versao %d != %d — rejeitado", ver, NTUWM_PROTO_VER);
+            dispd_log("wmproto: HELLO com versao %d fora de [%d,%d] — rejeitado",
+                      ver, NTUWM_PROTO_MIN, NTUWM_PROTO_VER);
             return;
         }
         if (g_hello) {                              /* segundo HELLO e' erro (#68) */
@@ -420,7 +538,12 @@ static void apply(char *line)
             return;
         }
         g_ngrabs = 0;
+        g_npending_grabs = 0;
+        g_grab_buffering = 0;
+        g_pointer_mod = 0;
+        g_pending_pointer_mod = 0;
         g_hello = 1;
+        g_proto_ver = ver;
         frame_clear();
         g_buffering = 0;
         g_srv.in_frame = 0;
@@ -434,8 +557,47 @@ static void apply(char *line)
     if (!strcmp(verb, CMD_PONG))                    /* heartbeat: recebe-lo ja basta (#62) */
         return;
 
+    if (!strcmp(verb, CMD_GRABS_BEGIN)) {
+        g_npending_grabs = 0;
+        g_pending_pointer_mod = 0;
+        g_grab_buffering = 1;
+        return;
+    }
+    if (!strcmp(verb, CMD_GRABS_COMMIT)) {
+        if (!g_grab_buffering)
+            return;
+        memcpy(g_grabs, g_pending_grabs,
+               (size_t)g_npending_grabs * sizeof g_grabs[0]);
+        g_ngrabs = g_npending_grabs;
+        g_pointer_mod = g_pending_pointer_mod;
+        g_npending_grabs = 0;
+        g_pending_pointer_mod = 0;
+        g_grab_buffering = 0;
+        return;
+    }
+    if (!strcmp(verb, CMD_POINTER_MOD)) {
+        char *av[3];
+        int n = ntuwm_split(line, av, 3, -1);
+        unsigned mods = n >= 2 ? (unsigned)strtoul(av[1], NULL, 16) : 0;
+        /* Somente bits de modificador Win32 conhecidos entram na politica. */
+        mods &= MOD_ALT | MOD_CTRL | MOD_SHIFT | MOD_WIN;
+        if (g_grab_buffering)
+            g_pending_pointer_mod = mods;
+        else
+            g_pointer_mod = mods;
+        return;
+    }
+
     if (!strcmp(verb, CMD_FRAME_BEGIN)) {
+        char *av[3];
+        int n = ntuwm_split(line, av, 3, -1);
+        unsigned serial = n >= 2 ? (unsigned)strtoul(av[1], NULL, 10) : 0;
+        if (g_proto_ver >= 2 && serial == 0) {
+            wm_send(EVT_ERR " frame-serial-invalido");
+            return;
+        }
         frame_clear();
+        g_frame_serial = serial;
         g_buffering = 1;
         g_srv.in_frame = 1;                          /* nao apresenta ate COMMIT */
         return;
@@ -446,10 +608,28 @@ static void apply(char *line)
             dispd_log("wmproto: COMMIT sem BEGIN — ignorado");
             return;
         }
-        frame_commit();                             /* swap atomico */
+        char *av[3];
+        int n = ntuwm_split(line, av, 3, -1);
+        unsigned serial = n >= 2 ? (unsigned)strtoul(av[1], NULL, 10) : 0;
+        if (g_proto_ver >= 2 && serial != g_frame_serial) {
+            dispd_log("wmproto: serial COMMIT %u != BEGIN %u — descartado",
+                      serial, g_frame_serial);
+            frame_clear();
+            g_buffering = 0;
+            g_srv.in_frame = 0;
+            wm_send(EVT_RESYNC);
+            return;
+        }
+        int applied = frame_commit();               /* swap atomico */
         g_buffering = 0;
         g_srv.in_frame = 0;
         g_srv.dirty = 1;
+        if (applied && g_proto_ver >= 2) {
+            char reply[64];
+            snprintf(reply, sizeof reply, "%s %u", EVT_FRAME_APPLIED,
+                     g_frame_serial);
+            wm_send(reply);
+        }
         return;
     }
     if (g_buffering && is_frame_verb(verb)) {
@@ -463,10 +643,17 @@ static void apply(char *line)
 static void reset_wm_state(void)
 {
     g_ngrabs = 0;
+    g_npending_grabs = 0;
+    g_grab_buffering = 0;
+    g_pointer_mod = 0;
+    g_pending_pointer_mod = 0;
     g_hello = 0;
+    g_proto_ver = 0;
     frame_clear();
     g_buffering = 0;
+    g_frame_serial = 0;
     g_srv.in_frame = 0;
+    input_cancel_drag();
     /* audit #47: NAO limpa a fila aqui — isso apagava o HELLO da conexao NOVA.
      * O bump de g_gen na desconexao ja invalida os comandos do WM morto (#66):
      * o check `gen != cur` no drain os descarta ao popar. */
@@ -542,6 +729,17 @@ static DWORD WINAPI reader_main(LPVOID arg)
                 Sleep(100);
                 continue;
             }
+        }
+
+        ULONG client_pid = 0;
+        DWORD client_session = (DWORD)-1, server_session = (DWORD)-2;
+        if (!GetNamedPipeClientProcessId(g_pipe, &client_pid) || !client_pid ||
+            !ProcessIdToSessionId((DWORD)client_pid, &client_session) ||
+            !ProcessIdToSessionId(GetCurrentProcessId(), &server_session) ||
+            client_session != server_session) {
+            dispd_log("wmproto: cliente sem PID/sessao valida rejeitado");
+            DisconnectNamedPipe(g_pipe);
+            continue;
         }
 
         LONG cur = InterlockedIncrement(&g_gen);   /* nova geracao de conexao */

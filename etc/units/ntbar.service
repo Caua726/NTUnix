@@ -1,0 +1,13 @@
+# ntbar - layer surface da barra do desktop
+[Unit]
+Description=NTUnix desktop bar
+Requires=dispd
+After=ntwm
+
+[Service]
+ExecStart=/system/bin/ntbar.exe
+Restart=always
+MemoryMax=24M
+
+[Install]
+WantedBy=default.target

@@ -38,11 +38,13 @@ DISPD_SRC := src/dispd/dispd.c src/dispd/compositor.c src/dispd/present_gdi.c \
              src/dispd/dbgterm.c
 DISPD_HDR := src/dispd/dispd.h src/dispd/present.h src/dispd/term.h \
              src/common/ntu.h src/common/ntuwm.h
-NTWM_SRC  := src/ntwm/ntwm.c src/ntwm/proto.c src/ntwm/layout.c
+NTWM_SRC  := src/ntwm/ntwm.c src/ntwm/proto.c src/ntwm/layout.c \
+             src/ntwm/config.c src/ntwm/actions.c src/ntwm/ipc.c \
+             src/ntwm/selftest.c
 
 BINS := $(BIN)/initd.exe $(BIN)/ntctl.exe $(BIN)/logd.exe $(BIN)/demod.exe \
         $(BIN)/ntsession.exe $(BIN)/dispd.exe $(BIN)/ntwm.exe $(BIN)/ntclock.exe \
-        $(BIN)/ntdbgcon.exe
+        $(BIN)/ntwmctl.exe $(BIN)/ntbar.exe $(BIN)/ntdbgcon.exe
 
 all: $(BINS) stage-files
 
@@ -101,6 +103,13 @@ $(BIN)/ntwm.exe: $(NTWM_SRC) $(COMMON) src/common/ntu.h src/common/ntuwm.h src/n
 $(BIN)/ntclock.exe: src/apps/ntclock/ntclock.c src/common/ntu.h | $(BIN)
 	$(CC) $(CFLAGS) -mwindows -o $@ src/apps/ntclock/ntclock.c -lgdi32 -luser32
 
+$(BIN)/ntwmctl.exe: src/apps/ntwmctl/ntwmctl.c src/common/ntu.h | $(BIN)
+	$(CC) $(CFLAGS) -o $@ src/apps/ntwmctl/ntwmctl.c
+
+$(BIN)/ntbar.exe: src/apps/ntbar/ntbar.c src/common/ntu.h \
+                  src/common/ntuapp.h src/common/ntuwm.h | $(BIN)
+	$(CC) $(CFLAGS) -mwindows -o $@ src/apps/ntbar/ntbar.c -lgdi32 -luser32
+
 $(BIN):
 	mkdir -p $(BIN) $(OUT)/etc/units/enabled $(OUT)/var/log $(OUT)/run
 
@@ -113,6 +122,7 @@ stage-files: | $(BIN)
 	cp proc/mounts $(OUT)/proc/
 	touch $(OUT)/etc/units/enabled/logd $(OUT)/etc/units/enabled/demod
 	touch $(OUT)/etc/units/enabled/dispd $(OUT)/etc/units/enabled/ntwm
+	touch $(OUT)/etc/units/enabled/ntbar
 	@# o canal de debug agora e' o dbgterm DENTRO do dispd (terminal compartilhado,
 	@# gated por NTUNIX_DEBUG no proprio dispd) -> o ntdbgcon separado nao e' mais
 	@# habilitado (conflitaria na mesma porta 2323).

@@ -9,6 +9,16 @@
 
 static char g_root[MAX_PATH];
 
+static void copy_capped(char *dst, size_t cap, const char *src)
+{
+    if (!cap)
+        return;
+    size_t n = strlen(src);
+    if (n >= cap) n = cap - 1;
+    memcpy(dst, src, n);
+    dst[n] = 0;
+}
+
 static int ends_with_icase(const char *s, const char *suf)
 {
     size_t ls = strlen(s), lf = strlen(suf);
@@ -22,7 +32,7 @@ const char *ntu_root(void)
 
     const char *env = getenv("NTUNIX_ROOT");
     if (env && *env) {
-        strncpy(g_root, env, sizeof g_root - 1);
+        copy_capped(g_root, sizeof g_root, env);
     } else {
         /* binarios NTUnix moram em <root>\system\bin — sobe dois niveis */
         char exe[MAX_PATH];
@@ -31,7 +41,7 @@ const char *ntu_root(void)
         if (p) *p = 0; /* diretorio do exe */
         if (ends_with_icase(exe, "\\system\\bin")) {
             exe[strlen(exe) - strlen("\\system\\bin")] = 0;
-            strncpy(g_root, exe, sizeof g_root - 1);
+            copy_capped(g_root, sizeof g_root, exe);
         } else {
             GetCurrentDirectoryA(sizeof g_root, g_root);
         }

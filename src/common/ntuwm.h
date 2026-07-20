@@ -17,7 +17,8 @@
 #ifndef NTUWM_H
 #define NTUWM_H
 
-#define NTUWM_PROTO_VER 1
+#define NTUWM_PROTO_MIN 1
+#define NTUWM_PROTO_VER 2
 
 /* numero de workspaces do desktop — unico limite compartilhado (#4): o dispd
  * valida, a barra desenha e o ntwm mapeia Alt+1..9 exatamente esta faixa. */
@@ -45,6 +46,10 @@
 #define EVT_PING       "PING"         /* dispd -> ntwm: heartbeat (espera PONG) #62 */
 #define EVT_WSREQ      "WSREQ"        /* dispd -> ntwm: usuario pediu workspace <n> #3 */
 #define EVT_MOVED      "MOVED"        /* dispd -> ntwm: MOVED <wid> <x> <y> <w> <h> #5 */
+#define EVT_WINDOW_V2  "WINDOW2"      /* WINDOW2 <wid> <kind> <pid> <ws> <flags> <title...> */
+#define EVT_FRAME_APPLIED "FRAME-APPLIED" /* FRAME-APPLIED <serial> */
+#define EVT_POINTER    "POINTER"      /* POINTER <wid> <x> <y> <button> <state> <mods> */
+#define EVT_CONFIGURE  "CONFIGURE"    /* compositor/output mudou; snapshot completo segue */
 
 /* audit #51/#52/#53: cap COMPARTILHADO de janelas — mesmo limite no snapshot, no
  * hit-test e no budget, com log explicito quando estourado (nunca na pratica:
@@ -61,6 +66,9 @@
 #define CMD_BORDER     "BORDER"       /* BORDER <wid> <px> <rrggbb> */
 #define CMD_TITLEBAR   "TITLEBAR"     /* TITLEBAR <wid> <on|off> <text...> */
 #define CMD_FRAME_COMMIT "FRAME-COMMIT"
+#define CMD_STATE       "STATE"       /* STATE <wid> <floating> <fullscreen> <maximized> */
+#define CMD_STYLE       "STYLE"       /* STYLE <wid> <border> <rgb> <opacity> <shadow> <radius> <animate> <titlebar> */
+#define CMD_ANIMATIONS  "ANIMATIONS"  /* ANIMATIONS <enabled> <move-ms> <open-ms> <ws-ms> <focus-ms> */
 #define CMD_SPAWN      "SPAWN-TERM"   /* SPAWN-TERM [cmdline...] */
 #define CMD_CLOSE      "CLOSE"        /* CLOSE <wid> */
 #define CMD_FLOAT      "FLOAT"        /* FLOAT <wid> <0|1>  (persiste no dispd p/ restart) */
@@ -68,6 +76,15 @@
 #define CMD_UNGRAB     "UNGRAB"       /* UNGRAB <mods> <vk> */
 #define CMD_QUIT       "QUIT"
 #define CMD_PONG       "PONG"         /* ntwm -> dispd: resposta ao PING (liveness) #62 */
+#define CMD_GRABS_BEGIN "GRABS-BEGIN"
+#define CMD_GRABS_COMMIT "GRABS-COMMIT"
+#define CMD_POINTER_MOD "POINTER-MOD" /* POINTER-MOD <mods>: modificador do drag */
+#define CMD_NOTIFY     "NOTIFY"       /* NOTIFY <mensagem...> */
+
+/* flags de WINDOW2 */
+#define NTUWM_STATE_FLOATING   0x01u
+#define NTUWM_STATE_FULLSCREEN 0x02u
+#define NTUWM_STATE_MAXIMIZED  0x04u
 
 /*
  * Split reentrante em tokens separados por espaco/tab. Devolve a contagem.

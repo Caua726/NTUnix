@@ -8,9 +8,11 @@ document.
 - [`VISAO.md`](VISAO.md) — architecture and the founding design. Start here.
 - [`PROTOCOLO.md`](PROTOCOLO.md) — initd control protocol: pipe, verbs, unit format.
 - [`musl-nt-spec.md`](musl-nt-spec.md) — libc ABI: LP64 over PE, NT syscall backend, limits.
+- [`DESKTOP.md`](DESKTOP.md) — ntwm/dispd/ntbar state, layouts, protocols, config and shortcuts.
 
-Two protocols have no document of their own: dispd↔ntwm lives in
-[`src/common/ntuwm.h`](../src/common/ntuwm.h), apps↔dispd in `src/dispd/appsrv.c`.
+The desktop wire constants live in
+[`src/common/ntuwm.h`](../src/common/ntuwm.h) and
+[`src/common/ntuapp.h`](../src/common/ntuapp.h).
 
 ## Guides
 
